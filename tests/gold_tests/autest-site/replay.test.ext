@@ -1,0 +1,56 @@
+'''
+'''
+#  Licensed to the Apache Software Foundation (ASF) under one
+#  or more contributor license agreements.  See the NOTICE file
+#  distributed with this work for additional information
+#  regarding copyright ownership.  The ASF licenses this file
+#  to you under the Apache License, Version 2.0 (the
+#  "License"); you may not use this file except in compliance
+#  with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
+import os
+
+# 2nd iteration, nonSSL tests only
+def replay(test_obj, session_folder, ts=None, uServer=None, ):
+    replay_path = os.path.join(test_obj.Variables.AtsTestToolsDir, 'traffic-replay')
+    data_dir = os.path.join(test_obj.RunDirectory, "traffic-replay")
+    session_folder_path = os.path.join(test_obj.TestDirectory, session_folder)
+
+    # take care of these so the user can just call Test.replay(<session folder name>) if they so desire
+    # trust the user to have provided the uServer with the right session files else we copy it over
+    if not uServer:
+        uServer = test_obj.MakeOriginServer("uServer", mode="replay")
+        uServer.Setup.Copy(session_folder_path, uServer.Variables.DataDir)
+
+    # trust the user to have setup the remapping already if they provided the TS
+    if not ts:
+        ts = test_obj.MakeATSProcess("ts")
+
+        # we use remap instead of uDNS because traffic-replay (for now) uses port 80; we don't want that and we can't use uDNS to change ports
+        ts.Disk.remap_config.AddLine('map / http://127.0.0.1:{0}'.format(uServer.Variables.Port))
+        ts.Disk.records_config.update({'proxy.config.diags.debug.enabled': 1})
+
+    # maybe consider do scanning of session file here?
+
+    test_obj.Setup.MakeDir(data_dir)
+    test_obj.Variables.TRPDataDir = data_dir
+    test_obj.Setup.Copy(session_folder_path, data_dir)
+    
+    tr = test_obj.AddTestRun()
+    # should assume python3 or no?
+    tr.Processes.Default.Command = 'python3 {0} -type nossl -v -log_dir {1} -p {2}'.format(replay_path, data_dir, ts.Variables.port)
+    tr.Processes.Default.StartBefore(ts)
+    tr.Processes.Default.StartBefore(uServer)
+    tr.Processes.Default.Streams.All = Testers.ExcludesExpression("FAIL", "A certain session has failed.")
+    tr.Processes.Default.Streams.All += Testers.ExcludesExpression("Error", "Traffic-replay has encountered an error.")
+    tr.Processes.Default.Streams.All += Testers.ExcludesExpression("Traceback", "Oh noes something crashed. :'(")
+
+AddTestRunSet(replay, name="replay")
