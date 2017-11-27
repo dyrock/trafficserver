@@ -43,8 +43,6 @@ def worker(input, output, proxy, replay_type, nThread):
         h2Replay.client_replay(input, proxy, output, nThread)
     elif replay_type == 'random':
         RandomReplay.client_replay(input, proxy, output, nThread)
-    elif replay_type == 'mixed':
-        lol implying this will work
 
         # progress_bar.next()
     # progress_bar.finish()
