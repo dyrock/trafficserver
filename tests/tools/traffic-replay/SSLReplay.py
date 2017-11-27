@@ -126,11 +126,16 @@ def txn_replay(session_filename, txn, proxy, result_queue, request_session):
             body = createDummyBodywithLength(nBytes)
         #print("request session is",id(request_session))
         if method == 'GET':
-            request_session.request('GET', 'https://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
-                                    headers=txn_req_headers_dict, body=body)
+            # request_session.request('GET', 'https://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
+            #                         headers=txn_req_headers_dict, body=body)
+            request_session.request('GET', extractHeader.extract_GET_path(txn_req_headers),
+                                      headers=txn_req_headers_dict, body=body)
+            # print(extractHeader.extract_GET_path(txn_req_headers))
             r1 = request_session.getresponse()
             responseHeaders = r1.getheaders()
             responseContent = r1.read()
+            # print(responseHeaders)
+            # print(responseContent)
 
         elif method == 'POST':
             request_session.request('POST', 'https://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
@@ -145,10 +150,17 @@ def txn_replay(session_filename, txn, proxy, result_queue, request_session):
             r1 = request_session.getresponse()
             responseHeaders = r1.getheaders()
             responseContent = r1.read()
-        for key, value in responseHeaders:
-            responseDict[key.lower()] = value
+        
+        responseDict = extractHeader.responseHeaderTuples_to_dict(responseHeaders)
         expected = extractHeader.responseHeader_to_dict(resp.getHeaders())
         # print(responseDict)
+        # print(dict(r1.getheaders()))
+        # print(r1.getheader('Cache-Control'))
+        # print("------------EXPECTED-----------")
+        # print(expected)
+        # print("------------RESP--------------")
+        # print(resp)
+        # print()
         if mainProcess.verbose:
             expected_output_split = resp.getHeaders().split('\r\n')[0].split(' ', 2)
             expected_output = (int(expected_output_split[1]), str(expected_output_split[2]))

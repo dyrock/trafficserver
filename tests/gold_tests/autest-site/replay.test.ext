@@ -29,6 +29,7 @@ def replay(test_obj, session_folder, ts=None, uServer=None, ):
     if not uServer:
         uServer = test_obj.MakeOriginServer("uServer", mode="replay")
         uServer.Setup.Copy(session_folder_path, uServer.Variables.DataDir)
+        uServer.StartupTimeout = 60
 
     # trust the user to have setup the remapping already if they provided the TS
     if not ts:

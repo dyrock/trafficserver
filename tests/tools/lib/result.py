@@ -32,7 +32,7 @@ class TermColors:
     ENDC = '\033[0m'
 
 
-ignoredFields = {'age', 'set-cookie', 'server', 'date', 'last-modified', 'via', 'expires', 'cahe-control'}  # all lower case
+ignoredFields = {'age', 'set-cookie', 'server', 'date', 'last-modified', 'via', 'expires', 'cahe-control', 'vary'}  # all lower case
 
 
 class Result(object):
@@ -57,21 +57,30 @@ class Result(object):
         else:
             return ""
 
-    def Compare(self, received_dict, expected_dict):
+    def Compare(self, received_dict, expected_dict, src=None):
         global ignoredFields
+        # print("RECEIVED")
+        # print(received_dict)
+        # print("RECIEVED CACHE CONTROL")
+        # print(received_dict['Cache-Control'.lower()])
+        # print("EXPECTED")
+        # print(expected_dict)
         try:
             for key in received_dict:
                 # print(key)
                 if key.lower() in expected_dict and key.lower() not in ignoredFields:
-                    #print("{0} ==? {1}".format(expected_dict[key.lower()],received_dict[key]))
-                    if received_dict[key] != expected_dict[key.lower()]:
+                    # print("{0} ==? {1}".format(expected_dict[key.lower()],received_dict[key]))
+                    if received_dict[key.lower()] != expected_dict[key.lower()]:
                         print("{0}Difference in the field \"{1}\": \n received:\n{2}\n expected:\n{3}{4}".format(
                             TermColors.FAIL, key, received_dict[key], expected_dict[key], TermColors.ENDC))
                         return False
 
         except:
             e = sys.exc_info()
-            print("Error in comparing key ", e, key, expected_dict[key.lower()], received_dict[key])
+            # if src:
+                # print("In {0}: ".format(src), end='')
+            print("Error in comparing key ", e, key, "expected", expected_dict[key.lower()], "received", received_dict[key])
+            # return False
         return True
 
     def getResultString(self, received_dict, expected_dict, colorize=False):

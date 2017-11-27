@@ -34,15 +34,33 @@ def extract_host(headers):
             return line.split(' ')[1]
     return "notfound"
 
+def responseHeaderTuples_to_dict(tuples):
+    ret_dict = {}
+    
+    for key, value in tuples:
+        if key.lower() in ret_dict:
+            ret_dict[key.lower()] = ret_dict[key.lower()] + ", " + value
+        else:
+            ret_dict[key.lower()] = value
+
+    return ret_dict
+
 
 def responseHeader_to_dict(header):
+    # print("IN RESPONSEHEADER_TO_DICT")
+    # print(header)
     headerFields = header.split('\r\n', 1)[1]
     fields = headerFields.split('\r\n')
     header = [x for x in fields if (x != u'')]
+    # print(header)
     headers = {}
     for line in header:
         split_here = line.find(":")
-        headers[line[:split_here].lower()] = line[(split_here + 1):].strip()
+        # append multiple headers into a single string
+        if line[:split_here].lower() in headers:
+            headers[line[:split_here].lower()] += ", {0}".format(line[(split_here + 1):].strip())
+        else:
+            headers[line[:split_here].lower()] = line[(split_here + 1):].strip()
 
     return headers
 

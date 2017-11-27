@@ -115,13 +115,24 @@ def txn_replay(session_filename, txn, proxy, result_queue, request_session):
             #gzip_file = gzip.GzipFile(fileobj=content)
             #shutil.copyfileobj(gzip_file, f)
         expected = extractHeader.responseHeader_to_dict(resp.getHeaders())
+        # print("------------EXPECTED-----------")
         # print(expected)
+        # print("------------RESP--------------")
+        # print(resp)
+        # print()
         if mainProcess.verbose:
             expected_output_split = resp.getHeaders().split('\r\n')[0].split(' ', 2)
             expected_output = (int(expected_output_split[1]), str(expected_output_split[2]))
             r = result.Result(session_filename, expected_output[0], response.status_code)
             print(r.getResultString(response.headers, expected, colorize=True))
-            r.Compare(response.headers, expected)
+            # res = r.Compare(response.headers, expected, session_filename)
+            r.Compare(response.headers, expected, session_filename)
+
+            # if not res:
+            #     print("RESPONSE")
+            #     print(response.headers)
+            #     print("EXPECTED")
+            #     print(expected)
         # result_queue.put(r)
     except UnicodeEncodeError as e:
         # these unicode errors are due to the interaction between Requests and our wiretrace data.

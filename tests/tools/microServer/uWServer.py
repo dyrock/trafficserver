@@ -367,6 +367,7 @@ class MyHandler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self):
+        print("Doing a GET")
         global G_replay_dict, test_mode_enabled
         if test_mode_enabled:
             time.sleep(time_delay)
@@ -420,7 +421,7 @@ class MyHandler(BaseHTTPRequestHandler):
                     header_parts = header.split(':', 1)
                     header_field = str(header_parts[0].strip())
                     header_field_val = str(header_parts[1].strip())
-                    #print("{0} === >{1}".format(header_field, header_field_val))
+                    print("{0} === >{1}".format(header_field, header_field_val))
                     self.send_header(header_field, header_field_val)
                 # End for
                 if test_mode_enabled:
@@ -681,7 +682,7 @@ def main():
         else:
             server = ThreadingServer((options.ip_address, options.port), MyHandler, options)
         server.timeout = 5
-        print("started server")
+        print("started server on port {0}".format(options.port))
         server_thread = threading.Thread(target=server.serve_forever())
         server_thread.daemon = True
         server_thread.start()

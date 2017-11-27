@@ -220,9 +220,9 @@ class SessionValidator(object):
             # errors by definition can't have bodies
             response_line = txn_resp.getHeaders().split('\r\n')[0]
             response_code = response_line.split(' ')[1]
-            if response_code.startswith('3') and txn_resp.getBody():
-                _verbose_print("transaction response was 3xx and had a body")
-                retval = False
+            # if response_code.startswith('3') and txn_resp.getBody():
+            #     _verbose_print("transaction response was 3xx and had a body")
+            #     retval = False
 
         except ValueError as e:
             _verbose_print("most likely an invalid transaction timestamp")
