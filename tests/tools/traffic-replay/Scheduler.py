@@ -40,12 +40,15 @@ def LaunchWorkers(path, nProcess, proxy, replay_type, nThread):
     OutputQ = Queue()
     #======================================== Pre-load queues
     for session in sessions:
-        # if nProcess == 1:
-        #    QList[0].put(session)
-        # else:
-        QList[random.randint(0, nProcess - 1)].put(session)
-        # if QList[0].qsize() > 10 :
-        #    break
+        if replay_type == 'mixed':
+            import magical things that will make this work
+        else:
+            # if nProcess == 1:
+            #    QList[0].put(session)
+            # else:
+            QList[random.randint(0, nProcess - 1)].put(session)
+            # if QList[0].qsize() > 10 :
+            #    break
     #=============================================== Launch Processes
     for i in range(nProcess):
         QList[i].put('STOP')
