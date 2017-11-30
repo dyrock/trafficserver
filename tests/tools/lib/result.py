@@ -32,7 +32,7 @@ class TermColors:
     ENDC = '\033[0m'
 
 
-ignoredFields = {'age', 'set-cookie', 'server', 'date', 'last-modified', 'via', 'expires', 'cahe-control', 'vary'}  # all lower case
+ignoredFields = {'age', 'set-cookie', 'server', 'date', 'last-modified', 'via', 'expires', 'cache-control', 'vary', 'connection'}  # all lower case
 
 
 class Result(object):
