@@ -128,8 +128,7 @@ def txn_replay(session_filename, txn, proxy, result_queue, request_session):
         if method == 'GET':
             # request_session.request('GET', 'https://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
             #                         headers=txn_req_headers_dict, body=body)
-            request_session.request('GET', extractHeader.extract_GET_path(txn_req_headers),
-                                      headers=txn_req_headers_dict, body=body)
+            request_session.request('GET', extractHeader.extract_GET_path(txn_req_headers), headers=txn_req_headers_dict, body=body)
             # print(extractHeader.extract_GET_path(txn_req_headers))
             r1 = request_session.getresponse()
             responseHeaders = r1.getheaders()
@@ -138,15 +137,13 @@ def txn_replay(session_filename, txn, proxy, result_queue, request_session):
             # print(responseContent)
 
         elif method == 'POST':
-            request_session.request('POST', 'https://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
-                                    headers=txn_req_headers_dict, body=body)
+            request_session.request('POST', extractHeader.extract_GET_path(txn_req_headers), headers=txn_req_headers_dict, body=body)
             r1 = request_session.getresponse()
             responseHeaders = r1.getheaders()
             responseContent = r1.read()
 
         elif method == 'HEAD':
-            request_session.request('HEAD', 'https://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
-                                    headers=txn_req_headers_dict, body=body)
+            request_session.request('HEAD', extractHeader.extract_GET_path(txn_req_headers), headers=txn_req_headers_dict, body=body)
             r1 = request_session.getresponse()
             responseHeaders = r1.getheaders()
             responseContent = r1.read()

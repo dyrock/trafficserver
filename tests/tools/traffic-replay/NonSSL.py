@@ -93,17 +93,13 @@ def txn_replay(session_filename, txn, proxy, result_queue, request_session):
             body = createDummyBodywithLength(nBytes)
         #print("request session is",id(request_session))
         if method == 'GET':
-            # response = request_session.get('http://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
-            #                                headers=txn_req_headers_dict, stream=False, allow_redirects=False, data=body)
-            response = request_session.get('http://' + extractHeader.extract_GET_path(txn_req_headers),
-                                      headers=txn_req_headers_dict, stream=False, allow_redirects=False, data=body)
+            response = request_session.get(extractHeader.extract_GET_path(txn_req_headers), headers=txn_req_headers_dict, stream=False, allow_redirects=False, data=body)
             if 'Content-Length' in response.headers:
                 content = response.raw
                 #print("len: {0} received {1}".format(response.headers['Content-Length'],content))
 
         elif method == 'POST':
-            response = request_session.post('http://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
-                                            headers=txn_req_headers_dict, stream=False, data=body, allow_redirects=False)
+            response = request_session.post(extractHeader.extract_GET_path(txn_req_headers), headers=txn_req_headers_dict, stream=False, data=body, allow_redirects=False)
 
             if 'Content-Length' in response.headers:
                 content = response.raw
@@ -111,8 +107,7 @@ def txn_replay(session_filename, txn, proxy, result_queue, request_session):
                 # print(content.data)
                 #print("len: {0} received {1}".format(response.headers['Content-Length'],content))
         elif method == 'HEAD':
-            response = request_session.head('http://' + extractHeader.extract_host(txn_req_headers) + extractHeader.extract_GET_path(txn_req_headers),
-                                            headers=txn_req_headers_dict, stream=False)
+            response = request_session.head(extractHeader.extract_GET_path(txn_req_headers), headers=txn_req_headers_dict, stream=False)
 
             #gzip_file = gzip.GzipFile(fileobj=content)
             #shutil.copyfileobj(gzip_file, f)
