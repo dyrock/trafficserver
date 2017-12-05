@@ -4,9 +4,11 @@ import os
 import sys
 import time
 import multiprocessing
-from queue import Queue
+from queue import Queue, Empty
 from threading import Thread
 import argparse
+
+readFinished = False
 
 # the provided thing should be a list of lists
 def condenseHeaders(headers):
@@ -35,7 +37,7 @@ def translate(in_dir, out_dir, isTesting, inQ, outQ):
                     "txns": []
             }
 
-            if count == 5000 and isTesting:
+            if count == 10000 and isTesting:
                 break
 
             name = f[:-4]
@@ -69,24 +71,28 @@ def translate(in_dir, out_dir, isTesting, inQ, outQ):
 
             # pprint(data, stream=open('{0}/{1}_http.json'.format(out_dir, name), 'w', encoding="ascii", errors="surrogateescape"), indent=4, width=sys.maxsize)
 
-            txn = {"request": {}, "uuid": data["transaction-id"], "response": {}}
-            
-            txn["request"]["timestamp"] = data["start-time"]
-            txn["request"]["headers"] = data["ua-request-line"] + condenseHeaders(data["ua-request-hdr"])
-            txn["request"]["body"] = data["ua-content"] # this might not work because of the list thing?
+            try:
+                txn = {"request": {}, "uuid": data["transaction-id"], "response": {}}
+                
+                txn["request"]["timestamp"] = data["start-time"]
+                txn["request"]["headers"] = data["ua-request-line"] + condenseHeaders(data["ua-request-hdr"])
+                txn["request"]["body"] = data["ua-content"] # this might not work because of the list thing?
 
-            txn["response"]["timestamp"] = data["end-time"]
-            txn["response"]["headers"] = data["proxy-response-line"] + condenseHeaders(data["proxy-response-hdr"])
-            txn["response"]["body"] = data["upstream-content"] # this also might not work
+                txn["response"]["timestamp"] = data["end-time"]
+                txn["response"]["headers"] = data["proxy-response-line"] + condenseHeaders(data["proxy-response-hdr"])
+                txn["response"]["body"] = data["upstream-content"] # this also might not work
 
-            result["txns"].append(txn)
+                result["txns"].append(txn)
+            except Exception as e:
+                print("file {0}/{1} failed: {2}".format(in_dir, f, e))
+                continue
 
             count += 1
 
-            # outQ.put(("{0}/{1}.json".format(out_dir, name), result))
+            outQ.put(("{0}/{1}.json".format(out_dir, name), result))
 
-            with open("{0}/{1}.json".format(out_dir, name), "w", encoding="ascii", errors="surrogateescape") as out_f:
-                json.dump(result, out_f, indent=4)
+            # with open("{0}/{1}.json".format(out_dir, name), "w", encoding="ascii", errors="surrogateescape") as out_f:
+            #     json.dump(result, out_f, indent=4)
 
             # print(data["ua-request-line"])
 
@@ -99,6 +105,27 @@ def translate(in_dir, out_dir, isTesting, inQ, outQ):
 
     # with open("session.json", "w", encoding="ascii", errors="surrogateescape") as f:
     #     f.write(json.dumps(result, indent=4))
+
+def writeOut(outQ):
+    global readFinished
+
+    print("Writer started")
+
+    while not readFinished and not outQ.empty():
+        try:
+            try:
+                f = outQ.get(False)
+            except Empty:
+                continue
+
+
+            with open(f[0], "w", encoding="ascii", errors="surrogateescape") as out_f:
+                json.dump(f[1], out_f, indent=4)
+        except KeyboardInterrupt:
+            break
+
+    print("Writer over")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -120,13 +147,20 @@ if __name__ == "__main__":
 
     Threads = []
 
-    for i in range(args.threads):
+    for i in range(max(args.threads - 1, 1)):
         t = Thread(target=translate, args=(args.in_dir, args.out_dir, args.test, inQ, outQ))
         t.start()
         Threads.append(t)
 
+    writer = Thread(target=writeOut, args=(outQ,))
+    writer.start()
+
     for t in Threads:
         t.join()
+
+    readFinished = True
+
+    writer.join()
 
     # while not outQ.empty():
     #     f = outQ.get()
