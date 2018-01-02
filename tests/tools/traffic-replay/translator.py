@@ -7,8 +7,9 @@ import multiprocessing
 from queue import Queue, Empty
 from threading import Thread
 import argparse
+# from natsort import natsorted -> TODO make ordered 
 
-readFinished = False
+sessions = {} # The name is sessions. JEFF sessions
 
 # the provided thing should be a list of lists
 def condenseHeaders(headers):
@@ -21,23 +22,25 @@ def condenseHeaders(headers):
 
     return result
 
-# def writer(outQ):
-
-
-def translate(in_dir, out_dir, isTesting, inQ, outQ):
+def translate(in_dir, out_dir, isTesting, inQ, outQ, individual):
+    global sessions
     count = 0
     
     while not inQ.empty():
         try:
             f = inQ.get()
-            
-            result = {
+
+            # can and will break if format changes
+            session_name = "-".join(f.split("-")[0:-1])
+
+            if session_name not in sessions:
+                sessions[session_name] = {
                     "timestamp": int(time.time()),
                     "version": "0.1",
                     "txns": []
-            }
+                }   
 
-            if count == 10000 and isTesting:
+            if count == 5000 and isTesting:
                 break
 
             name = f[:-4]
@@ -64,8 +67,23 @@ def translate(in_dir, out_dir, isTesting, inQ, outQ):
             # data['ua-request-line'] = data['ua-request-line'].replace('https', 'http')
             # data['ua-request-line'] = data['ua-request-line'].replace('HTTPS', 'HTTP')
 
-            # if 'https' in data['ua-request-line']:
-            #     continue
+            # filter out non-get requests
+            if data['ua-request-line'].split(" ")[0] != 'GET':
+                continue
+
+            # skip, as per zeyuan
+            if 'proxy-response-line' not in data:
+                continue
+
+            # filter out non-2xx responses
+            try:
+                if not data['proxy-response-line'].split(" ")[1].startswith('2'):
+                    continue
+            except Exception as e:
+                print("file {0}/{1} failed filtering 2xx: {2}".format(in_dir, f, e))
+                fd.close()
+                continue
+
 
             # print("on file {0}/{1}".format(in_dir, f))
 
@@ -82,17 +100,23 @@ def translate(in_dir, out_dir, isTesting, inQ, outQ):
                 txn["response"]["headers"] = data["proxy-response-line"] + condenseHeaders(data["proxy-response-hdr"])
                 txn["response"]["body"] = data["upstream-content"] # this also might not work
 
-                result["txns"].append(txn)
+                if individual:
+                    result = {
+                        "timestamp": int(time.time()),
+                        "version": "0.1",
+                        "txns": []
+                    }
+
+                    result["txns"].append(txn)
+                    
+                    outQ.put(("{0}/{1}.json".format(out_dir, name), result))
+                else:
+                    sessions[session_name]["txns"].append(txn)
             except Exception as e:
                 print("file {0}/{1} failed: {2}".format(in_dir, f, e))
                 continue
 
             count += 1
-
-            outQ.put(("{0}/{1}.json".format(out_dir, name), result))
-
-            # with open("{0}/{1}.json".format(out_dir, name), "w", encoding="ascii", errors="surrogateescape") as out_f:
-            #     json.dump(result, out_f, indent=4)
 
             # print(data["ua-request-line"])
 
@@ -100,31 +124,23 @@ def translate(in_dir, out_dir, isTesting, inQ, outQ):
         except KeyboardInterrupt:
             break
 
-    # if isTesting:
-    #     print(json.dumps(result, indent=4))
+def writeOut(out_dir, outQ, individual):
+    global sessions
+    print("Writing out results")
 
-    # with open("session.json", "w", encoding="ascii", errors="surrogateescape") as f:
-    #     f.write(json.dumps(result, indent=4))
-
-def writeOut(outQ):
-    global readFinished
-
-    print("Writer started")
-
-    while not readFinished and not outQ.empty():
-        try:
+    if individual:
+        while not outQ.empty():
             try:
                 f = outQ.get(False)
             except Empty:
-                continue
-
+                break
 
             with open(f[0], "w", encoding="ascii", errors="surrogateescape") as out_f:
                 json.dump(f[1], out_f, indent=4)
-        except KeyboardInterrupt:
-            break
-
-    print("Writer over")
+    else:
+        for session in sessions:
+                with open("{0}/{1}.json".format(out_dir, session), "w", encoding="ascii", errors="surrogateescape") as out_f:
+                    json.dump(sessions[session], out_f, indent=4)
 
 
 if __name__ == "__main__":
@@ -134,6 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("-i", type=str, dest='in_dir', help="input directory of log files")
     parser.add_argument("-o", type=str, dest='out_dir', help="output directory")
     parser.add_argument("--test", action="store_true", help="debug mode")
+    parser.add_argument("--individual", action="store_true", help="instead of outputting sessions, output individual txns")
 
     args = parser.parse_args()
     print("got input folder {0} and output folder {1}".format(args.in_dir, args.out_dir))
@@ -148,24 +165,13 @@ if __name__ == "__main__":
     Threads = []
 
     for i in range(max(args.threads - 1, 1)):
-        t = Thread(target=translate, args=(args.in_dir, args.out_dir, args.test, inQ, outQ))
+        t = Thread(target=translate, args=(args.in_dir, args.out_dir, args.test, inQ, outQ, args.individual))
         t.start()
         Threads.append(t)
-
-    writer = Thread(target=writeOut, args=(outQ,))
-    writer.start()
 
     for t in Threads:
         t.join()
 
-    readFinished = True
-
-    writer.join()
-
-    # while not outQ.empty():
-    #     f = outQ.get()
-
-    #     with open(f[0], "w", encoding="ascii", errors="surrogateescape") as out_f:
-    #         json.dump(f[1], out_f, indent=4)
+    writeOut(args.out_dir, outQ, args.individual)
 
     print("DONE")
