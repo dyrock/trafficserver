@@ -99,6 +99,7 @@ struct UserArg {
   enum Type {
     TXN,  ///< Transaction based.
     SSN,  ///< Session based
+    VCONN,///< VConnection based
     COUNT ///< Fake enum, # of valid entries.
   };
 
@@ -6018,6 +6019,24 @@ TSHttpSsnArgIndexNameLookup(const char *name, int *arg_idx, const char **descrip
   return TSHttpArgIndexNameLookup(UserArg::SSN, name, arg_idx, description);
 }
 
+TSReturnCode
+TSVConnArgIndexReserve(const char *name, const char *description, int *arg_idx)
+{
+  return TSHttpArgIndexReserve(UserArg::VCONN, name, description, arg_idx);
+}
+
+TSReturnCode
+TSVConnArgIndexLookup(int arg_idx, const char **name, const char **description)
+{
+  return TSHttpArgIndexLookup(UserArg::VCONN, arg_idx, name, description);
+}
+
+TSReturnCode
+TSVConnArgIndexNameLookup(const char *name, int *arg_idx, const char **description)
+{
+  return TSHttpArgIndexNameLookup(UserArg::VCONN, name, arg_idx, description);
+}
+
 void
 TSHttpTxnArgSet(TSHttpTxn txnp, int arg_idx, void *arg)
 {
@@ -6057,6 +6076,26 @@ TSHttpSsnArgGet(TSHttpSsn ssnp, int arg_idx)
 
   ProxyClientSession *cs = reinterpret_cast<ProxyClientSession *>(ssnp);
   return cs->get_user_arg(arg_idx);
+}
+
+void
+TSVConnArgSet(TSVConn connp, int arg_idx, void *arg)
+{
+  sdk_assert(sdk_sanity_check_iocore_structure(connp) == TS_SUCCESS);
+  sdk_assert(arg_idx >= 0 && arg_idx < TS_HTTP_MAX_USER_ARG);
+
+  AnnotatedVConnection *avc = reinterpret_cast<AnnotatedVConnection *>(connp);
+  avc->set_user_arg(arg_idx, arg);
+}
+
+void*
+TSVConnArgGet(TSVConn connp, int arg_idx)
+{
+  sdk_assert(sdk_sanity_check_iocore_structure(connp) == TS_SUCCESS);
+  sdk_assert(arg_idx >= 0 && arg_idx < TS_HTTP_MAX_USER_ARG);
+
+  AnnotatedVConnection *avc = reinterpret_cast<AnnotatedVConnection *>(connp);
+  return avc->get_user_arg(arg_idx);
 }
 
 void

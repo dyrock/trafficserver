@@ -180,18 +180,18 @@ setup_callbacks(TSHttpTxn txn, int preaccept_count, int sni_count, int cert_coun
     cb = TSContCreate(&CB_Pre_Accept, TSMutexCreate());
     TSContDataSet(cb, (void *)(intptr_t)i);
     if (txn) {
-      TSHttpTxnHookAdd(txn, TS_VCONN_PRE_ACCEPT_HOOK, cb);
+      TSHttpTxnHookAdd(txn, TS_VCONN_START_HOOK, cb);
     } else {
-      TSHttpHookAdd(TS_VCONN_PRE_ACCEPT_HOOK, cb);
+      TSHttpHookAdd(TS_VCONN_START_HOOK, cb);
     }
   }
   for (i = 0; i < preaccept_count_delay; i++) {
     cb = TSContCreate(&CB_Pre_Accept_Delay, TSMutexCreate());
     TSContDataSet(cb, (void *)(intptr_t)i);
     if (txn) {
-      TSHttpTxnHookAdd(txn, TS_VCONN_PRE_ACCEPT_HOOK, cb);
+      TSHttpTxnHookAdd(txn, TS_VCONN_START_HOOK, cb);
     } else {
-      TSHttpHookAdd(TS_VCONN_PRE_ACCEPT_HOOK, cb);
+      TSHttpHookAdd(TS_VCONN_START_HOOK, cb);
     }
   }
   for (i = 0; i < sni_count; i++) {
