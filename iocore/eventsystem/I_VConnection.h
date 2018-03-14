@@ -32,6 +32,7 @@
 #error "include I_VIO.h"
 #endif
 
+#define TS_VCONN_MAX_USER_ARG 16
 //
 // Data Types
 //
@@ -374,7 +375,28 @@ public:
   int lerrno;
 };
 
-struct DummyVConnection : public VConnection {
+class AnnotatedVConnection: public VConnection {
+  using self_type = AnnotatedVConnection;
+  using super_type = VConnection;
+public:
+  AnnotatedVConnection(ProxyMutex *aMutex): super_type(aMutex) {};
+  AnnotatedVConnection(Ptr<ProxyMutex> &aMutex): super_type(aMutex) {};
+  void *get_user_arg(unsigned ix) const
+  {
+    ink_assert(ix < user_args.size());
+    return this->user_args[ix];
+  };
+  void set_user_arg(unsigned ix, void *arg)
+  {
+    ink_assert(ix < user_args.size());
+    user_args[ix] = arg;
+  };
+
+protected:
+  std::array<void *, TS_VCONN_MAX_USER_ARG> user_args;
+};
+
+struct DummyVConnection : public AnnotatedVConnection {
   virtual VIO *
   do_io_write(Continuation * /* c ATS_UNUSED */, int64_t /* nbytes ATS_UNUSED */, IOBufferReader * /* buf ATS_UNUSED */,
               bool /* owner ATS_UNUSED */)
@@ -405,7 +427,7 @@ struct DummyVConnection : public VConnection {
                 "cannot use default implementation");
   }
 
-  DummyVConnection(ProxyMutex *m) : VConnection(m) {}
+  DummyVConnection(ProxyMutex *m) : AnnotatedVConnection(m) {}
 };
 
 #endif /*_I_VConnection_h_*/

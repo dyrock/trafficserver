@@ -534,7 +534,7 @@ TSPluginInit(int argc, const char *argv[])
     TSError(PCP "Failed to create SNI callback");
   } else {
     TSLifecycleHookAdd(TS_LIFECYCLE_PORTS_INITIALIZED_HOOK, cb_lc);
-    TSHttpHookAdd(TS_VCONN_PRE_ACCEPT_HOOK, cb_pa);
+    TSHttpHookAdd(TS_VCONN_START_HOOK, cb_pa);
     TSHttpHookAdd(TS_SSL_SNI_HOOK, cb_sni);
     success = true;
   }
