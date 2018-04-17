@@ -27,7 +27,6 @@
 
 #include "ts/ts.h"
 
-
 const char* PLUGIN_NAME = "certifier";
 
 /// Override default delete for unique ptrs to openSSL objects
@@ -38,6 +37,7 @@ namespace std
   template <> struct default_delete<EVP_PKEY>   { void operator () (EVP_PKEY* n)  { EVP_PKEY_free(n); }};
   template <> struct default_delete<SSL_CTX>    { void operator () (SSL_CTX* n)   { SSL_CTX_free(n);  }};
 }
+
 /// Name aliases for unique pts to openSSL objects
 using scoped_X509       = std::unique_ptr<X509>;
 using scoped_X509_REQ   = std::unique_ptr<X509_REQ>;
@@ -46,7 +46,7 @@ using scoped_SSL_CTX    = std::unique_ptr<SSL_CTX>;
 
 class SslLRUList
 {
-public:
+private:
   struct SslData {
     std::queue<void*>             vconnQ;               ///< Current queue of connections waiting for cert
     std::unique_ptr<SSL_CTX>      ctx;                  ///< Context generated
@@ -61,12 +61,22 @@ public:
 
     SslData() {}
     ~SslData() {
-      TSDebug("txn_mon", "Deleting ssl data for [%s]", commonName.c_str());
+      TSDebug(PLUGIN_NAME, "Deleting ssl data for [%s]", commonName.c_str());
     }
   };
 
   using scoped_SslData = std::unique_ptr<SslLRUList::SslData>;
 
+  // unordered_map is much faster in terms of insertion/lookup/removal
+  // Althogh it uses more space than map, the time efficiency should be more important
+  std::unordered_map< std::string, scoped_SslData > cnDataMap;  ///< Map from CN to sslData
+  TSMutex list_mutex;
+
+  int     size = 0;
+  int     limit;
+  SslData *head = nullptr;
+  SslData *tail = nullptr;
+public:
   SslLRUList(int in_limit = 4096) : limit(in_limit) {
     list_mutex = TSMutexCreate();
   }
@@ -89,7 +99,6 @@ public:
       if ((ssl_data = dataItr->second.get())->wontdo) {
         wontdo = true;
       } else if (ssl_data->ctx) {
-        TSDebug("txn_mon", "cert_retriever(): [%s] Reusing context", servername);
         ref_ctx = ssl_data->ctx.get();
       } else {
         ssl_data->vconnQ.push(edata);
@@ -106,7 +115,7 @@ public:
       if (target_data == nullptr) {
         target_data = std::move(scoped_ssl_data);
       } else {
-        TSDebug("txn_mon", "something wrong, stringview?");
+        TSDebug(PLUGIN_NAME, "something wrong, stringview?");
       }
     }
     if (ssl_data != nullptr) {
@@ -168,10 +177,11 @@ public:
           tail = data;
         }
 
-        // Remove oldest node if size exceeds limit
+        // If node is already in the list, prepend simply changes order without resizing
         if (!present) {
+          // Remove oldest node if size exceeds limit
           if (++size > limit) {
-            TSDebug("txn_mon", "Removing %s", tail->commonName.c_str());
+            TSDebug(PLUGIN_NAME, "Removing %s", tail->commonName.c_str());
             auto iter = cnDataMap.find(tail->commonName);
             if (iter != cnDataMap.end()) {
               local = std::move(iter->second);   // copy ownership
@@ -185,7 +195,7 @@ public:
         }
       }
     }
-    TSDebug("txn_mon", "%s Prepend to LRU list...List Size:%d Map Size: %d", data->commonName.c_str(), size, static_cast<int>(cnDataMap.size()));
+    TSDebug(PLUGIN_NAME, "%s Prepend to LRU list...List Size:%d Map Size: %d", data->commonName.c_str(), size, static_cast<int>(cnDataMap.size()));
 
     TSMutexUnlock(list_mutex);
   }
@@ -254,23 +264,15 @@ public:
     TSMutexUnlock(list_mutex);
     return ret;
   }
-private:
-  // unordered_map is much faster in terms of insertion/lookup/removal
-  // Althogh it uses more space than map, the time efficiency should be more important
-  // [Dev]: For LRU, we can reserve the size.
-  std::unordered_map< std::string, scoped_SslData > cnDataMap;  ///< Map from CN to sslData
-  TSMutex list_mutex;
-
-  int     size = 0;
-  int     limit;
-  SslData *head = nullptr;
-  SslData *tail = nullptr;
 };
 
+// Flag for dynamic cert generation
 static bool sign_enabled = false;
+
 // Trusted CA private key and cert
 static scoped_X509      ca_cert_scoped;
 static scoped_EVP_PKEY  ca_pkey_scoped;
+//static scoped_EVP_PKEY  ts_pkey_scoped;
 
 static int            ca_serial;                                  ///< serial number
 static std::fstream   serial_file;                                ///< serial number file
@@ -291,8 +293,10 @@ mkcsr(const char* cn)
 
   /// Set X509 version
   X509_REQ_set_version(req.get(),1);
+
   /// Get handle to subject name
   n = X509_REQ_get_subject_name(req.get());
+
   /// Set common name field
   if(X509_NAME_add_entry_by_txt(n,"CN",MBSTRING_ASC,(unsigned char*)cn,-1,-1,0)!=1){
     TSError("[%s] mkcsr(): Failed to add entry.", PLUGIN_NAME);
@@ -324,8 +328,10 @@ sign_X509(X509 *cert, EVP_PKEY *pkey, const EVP_MD *md)
   rv = EVP_DigestSignInit(&mctx, &pkctx, md, NULL, pkey);
 
   /// Sign X509
-  if (rv > 0)
+  if (rv > 0) {
     rv = X509_sign_ctx(cert, &mctx);
+  }
+
   EVP_MD_CTX_cleanup(&mctx);
   return rv > 0 ? 1 : 0;
 }
@@ -363,22 +369,22 @@ mkcrt(X509_REQ *req, int serial)
   /// Get a handle to csr subject name
   subj = X509_REQ_get_subject_name(req);
   if ((tmpsubj = X509_NAME_dup(subj)) == nullptr) {
-    TSDebug("txn_mon","mkcrt(): Failed to duplicate subject name.");
+    TSDebug(PLUGIN_NAME,"mkcrt(): Failed to duplicate subject name.");
     return nullptr;
   }
   if ((X509_set_subject_name(cert.get(), tmpsubj)) == 0) {
-    TSDebug("txn_mon", "mkcrt(): Failed to set X509 subject name");
+    TSDebug(PLUGIN_NAME, "mkcrt(): Failed to set X509 subject name");
     X509_NAME_free(tmpsubj);    ///< explicit call to free X509_NAME object
     return nullptr;
   }
   pktmp.reset(X509_REQ_get_pubkey(req));
   if (pktmp == nullptr) {
-    TSDebug("txn_mon", "mkcrt(): Failed to get CSR public key.");
+    TSDebug(PLUGIN_NAME, "mkcrt(): Failed to get CSR public key.");
     X509_NAME_free(tmpsubj);
     return nullptr;
   }
   if (X509_set_pubkey(cert.get(), pktmp.get()) == 0) {
-    TSDebug("txn_mon", "mkcrt(): Failed to set X509 public key.");
+    TSDebug(PLUGIN_NAME, "mkcrt(): Failed to set X509 public key.");
     X509_NAME_free(tmpsubj);
     return nullptr;
   }
@@ -391,7 +397,6 @@ mkcrt(X509_REQ *req, int serial)
 static int
 shadow_cert_generator(TSCont contp, TSEvent event, void *edata)
 {
-  TSDebug(PLUGIN_NAME, "Entering shadow_cert_generator()...");
   const char* servername = reinterpret_cast<const char*>(TSContDataGet(contp));
   std::string commonName(servername);
 
@@ -406,19 +411,19 @@ shadow_cert_generator(TSCont contp, TSEvent event, void *edata)
   MD5(reinterpret_cast<unsigned char const*>(commonName.data()), commonName.length(), digest);
   char md5String[5];
   sprintf(md5String, "%02hhx%02hhx", digest[0], digest[1]);
-  std::string path = store_path + "/certs/" + std::string(md5String, 3);
+  std::string path = store_path + "/" + std::string(md5String, 3);
   std::string cert_filename = path +'/' + commonName + ".crt";
 
   struct stat st;
   FILE *fp = nullptr;
   /// If directory doesn't exist, creat one
   if (stat(path.c_str(), &st) == -1) {
-    mkdir(path.c_str(), 0666);
+    mkdir(path.c_str(), 0755);
   } else {
     /// Try open the file if directory exists
     fp = fopen(cert_filename.c_str(), "rt");
   }
-
+  TSDebug(PLUGIN_NAME, "shadow_cert_generator(): Cert file is expected at %s", cert_filename.c_str());
   /// If cert file exists and is readable
   if (fp != nullptr) {
     cert.reset(PEM_read_X509(fp, nullptr, nullptr, nullptr));
@@ -429,18 +434,19 @@ shadow_cert_generator(TSCont contp, TSEvent event, void *edata)
       TSError("[%s] [shadow_cert_generator] Problem with loading certs", PLUGIN_NAME);
       std::remove(cert_filename.c_str());
     } else {
-      TSDebug("txn_mon", "shadow_cert_generator(): Loaded cert from file %s", cert_filename.c_str());
+      TSDebug(PLUGIN_NAME, "shadow_cert_generator(): Loaded cert from file");
     }
   }
 
   /// No valid certs available from disk, create one and write to file
   if (cert == nullptr) {
     if (!sign_enabled){
+      TSDebug(PLUGIN_NAME, "shadow_cert_generator(): No certs found and dynamic generation disabled. Marked as wontdo.");
       // There won't be certs avaiable. Mark this servername as wontdo
       // Pass on as if plugin doesn't exist
       ssl_list->setup_data_ctx(commonName, localQ, nullptr, nullptr, true);
       while(!localQ.empty()) {
-        //TSDebug("txn_mon", "\tClearing the queue size %lu", localQ.size());
+        //TSDebug(PLUGIN_NAME, "\tClearing the queue size %lu", localQ.size());
         TSVConn ssl_vc = reinterpret_cast<TSVConn>(localQ.front());
         localQ.pop();
         TSVConnReenable(ssl_vc);
@@ -448,7 +454,7 @@ shadow_cert_generator(TSCont contp, TSEvent event, void *edata)
       TSContDestroy(contp);
       return TS_SUCCESS;
     }
-    TSDebug("txn_mon", "shadow_cert_generator(): Creating shadow certs");
+    TSDebug(PLUGIN_NAME, "shadow_cert_generator(): Creating shadow certs");
 
     /// Get serial number
     TSMutexLock(serial_mutex);
@@ -465,7 +471,7 @@ shadow_cert_generator(TSCont contp, TSEvent event, void *edata)
     /// Create CSR and cert
     req = std::move(mkcsr(commonName.c_str()));
     if (req == nullptr) {
-      TSDebug("txn_mon","[shadow_cert_generator] CSR generation failed");
+      TSDebug(PLUGIN_NAME,"[shadow_cert_generator] CSR generation failed");
       TSContDestroy(contp);
       ssl_list->set_schedule(commonName, false);
       return TS_ERROR;
@@ -474,7 +480,7 @@ shadow_cert_generator(TSCont contp, TSEvent event, void *edata)
     cert = std::move(mkcrt(req.get(), serial));
 
     if (cert == nullptr) {
-      TSDebug("txn_mon","[shadow_cert_generator] Cert generation failed");
+      TSDebug(PLUGIN_NAME,"[shadow_cert_generator] Cert generation failed");
       TSContDestroy(contp);
       ssl_list->set_schedule(commonName, false);
       return TS_ERROR;
@@ -482,10 +488,10 @@ shadow_cert_generator(TSCont contp, TSEvent event, void *edata)
 
     /// Write certs to file
     if ((fp = fopen(cert_filename.c_str(), "w+")) == nullptr) {
-      //TSDebug("txn_mon", "Error opening file: %s\n", strerror( errno ) );
+      TSDebug(PLUGIN_NAME, "shadow_cert_generator(): Error opening file: %s\n", strerror( errno ) );
     } else {
       if (!PEM_write_X509(fp, cert.get())) {
-        //TSDebug("txn_mon", "Error writing cert to disk");
+        TSDebug(PLUGIN_NAME, "shadow_cert_generator(): Error writing cert to disk");
       }
       fclose(fp);
     }
@@ -507,15 +513,12 @@ shadow_cert_generator(TSCont contp, TSEvent event, void *edata)
     ssl_list->set_schedule(commonName, false);
     return TS_ERROR;
   }
-
-  //TSDebug("txn_mon", "SSL context created with SNI: %s",commonName.c_str());
-
+  TSDebug(PLUGIN_NAME, "shadow_cert_generator(): cert and context ready, clearing the queue");
   ssl_list->setup_data_ctx(commonName, localQ, std::move(ctx), std::move(cert), false);
-  //TSDebug("txn_mon", "\tClearing queue size %d", static_cast<int>(localQ.size()));
 
   /// Clear the queue by setting context for each and reenable them
   while(!localQ.empty()) {
-    //TSDebug("txn_mon", "\tClearing the queue size %lu", localQ.size());
+    TSDebug(PLUGIN_NAME, "\tClearing the queue size %lu", localQ.size());
     TSVConn ssl_vc = reinterpret_cast<TSVConn>(localQ.front());
     localQ.pop();
     TSSslConnection sslobj  = TSVConnSSLConnectionGet(ssl_vc);
@@ -531,7 +534,6 @@ shadow_cert_generator(TSCont contp, TSEvent event, void *edata)
 /// Callback at TS_SSL_CERT_HOOK, generate/look up shadow certificates based on SNI/FQDN
 static int
 cert_retriever(TSCont contp, TSEvent event, void *edata) {
-  TSDebug(PLUGIN_NAME, "Entering cert_retriever()...");
   TSVConn ssl_vc          = reinterpret_cast<TSVConn>(edata);
   TSSslConnection sslobj  = TSVConnSSLConnectionGet(ssl_vc);
   SSL *ssl                = reinterpret_cast<SSL*>(sslobj);
@@ -545,14 +547,17 @@ cert_retriever(TSCont contp, TSEvent event, void *edata) {
   bool wontdo = false;
   ref_ctx = ssl_list->lookup_and_create(servername, edata, wontdo);
   if (wontdo) {
+    TSDebug(PLUGIN_NAME, "cert_retriever(): Won't generate cert for %s", servername);
     TSVConnReenable(ssl_vc);
   } else if (nullptr == ref_ctx) {
     // If no existing context, schedule TASK thread to generate
+    TSDebug(PLUGIN_NAME, "cert_retriever(): schedule thread to generate/retrieve cert for %s", servername);
     TSCont schedule_cont = TSContCreate(shadow_cert_generator, TSMutexCreate());
     TSContDataSet(schedule_cont, (void*)servername);
     TSContSchedule(schedule_cont, 0, TS_THREAD_POOL_TASK);
   } else {
     // Use existing context
+    TSDebug(PLUGIN_NAME, "cert_retriever(): Reuse existing cert and context for %s", servername);
     SSL_set_SSL_CTX(ssl, ref_ctx);
     TSVConnReenable(ssl_vc);
   }
@@ -644,11 +649,20 @@ TSPluginInit(int argc, const char *argv[])
       }
       ca_pkey_scoped.reset(PEM_read_PrivateKey(fp, nullptr, nullptr, nullptr));
       fclose(fp);
+
+      // if ((fp = fopen(tskey, "rt")) == nullptr) {
+      //   TSDebug(PLUGIN_NAME, "fopen() error is %d: %s for %s", errno, strerror(errno), tskey);
+      //   TSError("[%s] Unable to initialize plugin. Failed to open ts key.", PLUGIN_NAME);
+      //   return;
+      // }
+      // ts_pkey_scoped.reset(PEM_read_PrivateKey(fp, nullptr, nullptr, nullptr));
+
       if (ca_pkey_scoped == nullptr || ca_cert_scoped == nullptr) {
         TSDebug(PLUGIN_NAME, "PEM_read failed to read %s %s", ca_pkey_scoped?"":"pkey", ca_cert_scoped?"":"cert");
         TSError("[%s] Unable to initialize plugin. Failed to read ca key/cert.", PLUGIN_NAME);
         return;
       }
+
       // Read serial file
       serial_file.open(serial, std::fstream::in | std::fstream::out);
       if (!serial_file.is_open()) {
