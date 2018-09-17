@@ -26,6 +26,7 @@
 
 #include "ts/apidefs.h"
 #include "api/ts/remap.h"
+#include "Plugin.h"
 
 #define TSREMAP_FUNCNAME_INIT "TSRemapInit"
 #define TSREMAP_FUNCNAME_CONFIG_RELOAD "TSRemapConfigReload"
@@ -40,7 +41,7 @@ class url_mapping;
 /**
  *
  **/
-class remap_plugin_info
+class remap_plugin_info : public PluginInfo
 {
 public:
   typedef TSReturnCode _tsremap_init(TSRemapInterface *api_info, char *errbuf, int errbuf_size);

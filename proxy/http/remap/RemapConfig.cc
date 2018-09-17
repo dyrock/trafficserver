@@ -775,6 +775,11 @@ remap_load_plugin(const char **argv, int argc, url_mapping *mp, char *errbuf, in
 
   if (!remap_pi_list || (pi = remap_pi_list->find_by_path(c)) == nullptr) {
     pi = new remap_plugin_info(c);
+
+    optarg = strrchr(c, '/'); // Use the base file name as part of the plugin name.
+    snprintf(tmpbuf, sizeof(tmpbuf)-1, "remap:%s", optarg ? optarg+1 : c);
+    pi->_name = ats_strdump(tmpbuf);
+
     if (!remap_pi_list) {
       remap_pi_list = pi;
     } else {
@@ -838,7 +843,7 @@ remap_load_plugin(const char **argv, int argc, url_mapping *mp, char *errbuf, in
       ri.tsremap_version = TSREMAP_VERSION;
 
       if (pi->fp_tsremap_init(&ri, tmpbuf, sizeof(tmpbuf) - 1) != TS_SUCCESS) {
-        snprintf(errbuf, errbufsize, "Failed to initialize plugin \"%s\": %s", pi->path,
+        snprintf(errbuf, errbufsize, "Failed to initialize plugin \"%s\": %s", pi->_file_path.get(),
                  tmpbuf[0] ? tmpbuf : "Unknown plugin error");
         return -5;
       }
@@ -887,7 +892,7 @@ remap_load_plugin(const char **argv, int argc, url_mapping *mp, char *errbuf, in
     Debug("url_rewrite", "Argument %d: %s", k, argv[k]);
   }
 
-  Debug("url_rewrite", "Viewing parsed plugin parameters for %s: [%d]", pi->path, *plugin_found_at);
+  Debug("url_rewrite", "Viewing parsed plugin parameters for %s: [%d]", pi->_file_path.get(), *plugin_found_at);
   for (int k = 0; k < parc; k++) {
     Debug("url_rewrite", "Argument %d: %s", k, parv[k]);
   }

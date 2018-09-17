@@ -1005,6 +1005,7 @@ INKContInternal::init(TSEventFunc funcp, TSMutex mutexp)
 
   mutex        = (ProxyMutex *)mutexp;
   m_event_func = funcp;
+  m_info = PluginContext::get();
 }
 
 void
@@ -1025,7 +1026,7 @@ void
 INKContInternal::destroy()
 {
   if (m_free_magic == INKCONT_INTERN_MAGIC_DEAD) {
-    ink_release_assert(!"Plugin tries to use a continuation which is deleted");
+    Fatal("Plugin %s tried to use a continuation [%p] which is deleted", m_info ? m_info->_name.get() : "*UNKNOWN*", this);
   }
   m_deleted = 1;
   if (m_deletable) {
@@ -1293,6 +1294,7 @@ APIHook::prev() const
 int
 APIHook::invoke(int event, void *edata) const
 {
+  PluginContext pc(m_cont->m_info);
   if ((event == EVENT_IMMEDIATE) || (event == EVENT_INTERVAL) || event == TS_EVENT_HTTP_TXN_CLOSE) {
     if (ink_atomic_increment((int *)&m_cont->m_event_count, 1) < 0) {
       ink_assert(!"not reached");
@@ -1921,24 +1923,26 @@ TSPluginDirGet(void)
 TSReturnCode
 TSPluginRegister(const TSPluginRegistrationInfo *plugin_info)
 {
+  GlobalPluginInfo * p = static_cast<GlobalPluginInfo*>(const_cast<PluginInfo*>(PluginContext::get()));
   sdk_assert(sdk_sanity_check_null_ptr((void *)plugin_info) == TS_SUCCESS);
 
-  if (!plugin_reg_current) {
+  if (nullptr == p) {
     return TS_ERROR;
   }
 
-  plugin_reg_current->plugin_registered = true;
+  p->_flags._flag._registered = true;
+
 
   if (plugin_info->plugin_name) {
-    plugin_reg_current->plugin_name = ats_strdup(plugin_info->plugin_name);
+    p->_name = ats_strdup(plugin_info->plugin_name);
   }
 
   if (plugin_info->vendor_name) {
-    plugin_reg_current->vendor_name = ats_strdup(plugin_info->vendor_name);
+    p->_vendor = ats_strdup(plugin_info->vendor_name);
   }
 
   if (plugin_info->support_email) {
-    plugin_reg_current->support_email = ats_strdup(plugin_info->support_email);
+    p->_email = ats_strdup(plugin_info->support_email);
   }
 
   return TS_SUCCESS;
