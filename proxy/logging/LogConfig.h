@@ -23,10 +23,13 @@
 
 #pragma once
 
+#include <string_view>
+#include <string>
 #include "ts/ink_platform.h"
 #include "P_RecProcess.h"
 #include "ProxyConfig.h"
 #include "LogObject.h"
+#include "ts/IntrusiveHashMap.h"
 
 /* Instead of enumerating the stats in DynamicStats.h, each module needs
    to enumerate its stats separately and register them with librecords
@@ -73,6 +76,67 @@ extern RecRawStatBlock *log_rsb;
 
 struct dirent;
 struct LogCollationAccept;
+
+/*-------------------------------------------------------------------------
+  LogDeleteCandidate, LogDeletingInfo&Descriptor
+  -------------------------------------------------------------------------*/
+struct LogDeleteCandidate {
+  std::string name;
+  int64_t size;
+  time_t mtime;
+
+  LogDeleteCandidate(char *p_name, int64_t st_size, time_t st_time) : name(p_name), size(st_size), mtime(st_time) {}
+};
+
+struct LogDeletingInfo {
+  std::string name;
+  int64_t space_limit_mb{0};
+  int64_t total_size{0LL};
+  std::vector<LogDeleteCandidate> candidates;
+
+  LogDeletingInfo *_next{nullptr};
+  LogDeletingInfo *_prev{nullptr};
+
+  LogDeletingInfo(std::string_view type, int64_t limit) : name(type), space_limit_mb(limit) {}
+  void
+  clear()
+  {
+    total_size = 0LL;
+    candidates.clear();
+  }
+};
+
+struct LogDeletingInfoDescriptor {
+  using key_type   = std::string_view;
+  using value_type = LogDeletingInfo;
+
+  static key_type
+  key_of(value_type *value)
+  {
+    return value->name;
+  }
+  static bool
+  equal(key_type const &lhs, key_type const &rhs)
+  {
+    return lhs == rhs;
+  }
+  static value_type *&
+  next_ptr(value_type *value)
+  {
+    return value->_next;
+  }
+  static value_type *&
+  prev_ptr(value_type *value)
+  {
+    return value->_prev;
+  }
+  static constexpr std::hash<std::string_view> hasher{};
+  static auto
+  hash_of(key_type s) -> decltype(hasher(s))
+  {
+    return hasher(s);
+  }
+};
 
 /*-------------------------------------------------------------------------
   this object keeps the state of the logging configuraion variables.  upon
@@ -190,6 +254,8 @@ public:
   int rolling_size_mb;
   bool auto_delete_rolled_files;
 
+  IntrusiveHashMap<LogDeletingInfoDescriptor> deleting_info;
+
   int sampling_frequency;
   int file_stat_frequency;
   int space_used_frequency;
@@ -226,14 +292,4 @@ private:
   // -- member functions not allowed --
   LogConfig(const LogConfig &) = delete;
   LogConfig &operator=(const LogConfig &) = delete;
-};
-
-/*-------------------------------------------------------------------------
-  LogDeleteCandidate
-  -------------------------------------------------------------------------*/
-
-struct LogDeleteCandidate {
-  time_t mtime;
-  char *name;
-  int64_t size;
 };
