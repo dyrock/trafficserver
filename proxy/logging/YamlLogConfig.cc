@@ -179,21 +179,7 @@ YamlLogConfig::decodeLogObject(const YAML::Node &node)
                                  obj_rolling_interval_sec, obj_rolling_offset_hr, obj_rolling_size_mb);
 
   // Generate LogDeletingInfo entry for later use
-  std::string ext;
-  switch (file_type) {
-  case LOG_FILE_ASCII:
-    ext = LOG_FILE_ASCII_OBJECT_FILENAME_EXTENSION;
-    break;
-  case LOG_FILE_PIPE:
-    ext = LOG_FILE_PIPE_OBJECT_FILENAME_EXTENSION;
-    break;
-  case LOG_FILE_BINARY:
-    ext = LOG_FILE_BINARY_OBJECT_FILENAME_EXTENSION;
-    break;
-  default:
-    break;
-  }
-  cfg->deleting_info.insert(new LogDeletingInfo(filename + ext, ((obj_min_count == 0) ? INT_MAX : obj_min_count)));
+  logObject->set_rolling_min_count(obj_min_count);
 
   // filters
   auto filters = node["filters"];

@@ -215,6 +215,12 @@ public:
     _setup_rolling(m_rolling_enabled, m_rolling_interval_sec, m_rolling_offset_hr, rolling_size_mb);
   }
 
+  inline void
+  set_rolling_min_count(int rolling_min_count)
+  {
+    _setup_deletion(rolling_min_count);
+  }
+
   inline bool
   is_collation_client() const
   {
@@ -301,6 +307,7 @@ private:
   void generate_filenames(const char *log_dir, const char *basename, LogFileFormat file_format);
   void _setup_rolling(Log::RollingEnabledValues rolling_enabled, int rolling_interval_sec, int rolling_offset_hr,
                       int rolling_size_mb);
+  void _setup_deletion(int rolling_min_count);
   unsigned _roll_files(long interval_start, long interval_end);
 
   LogBuffer *_checkout_write(size_t *write_offset, size_t write_size);

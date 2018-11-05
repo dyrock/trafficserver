@@ -705,6 +705,19 @@ LogObject::_setup_rolling(Log::RollingEnabledValues rolling_enabled, int rolling
   }
 }
 
+void
+LogObject::_setup_deletion(int rolling_min_count)
+{
+  auto &dim = Log::config->deleting_info;
+  auto spot = dim.find(m_basename);
+  int m_cnt = (rolling_min_count == 0) ? INT_MAX : rolling_min_count;
+  if (spot != dim.end()) {
+    spot->min_count = m_cnt;
+  } else {
+    dim.insert(new LogDeletingInfo(m_basename, m_cnt));
+  }
+}
+
 unsigned
 LogObject::roll_files(long time_now)
 {

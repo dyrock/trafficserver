@@ -48,6 +48,9 @@ The logging API enables you to:
 -  Set the rolling size for your custom text log: see
    :c:func:`TSTextLogObjectRollingSizeMbSet`
 
+-  Set the rolling min count for your custom text log: see
+   :c:func:`TSTextLogObjectRollingMinCountSet`
+
 -  Write text entries to the custom text log: see
    :c:func:`TSTextLogObjectWrite`
 

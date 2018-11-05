@@ -38,6 +38,7 @@ Synopsis
 .. function:: void TSTextLogObjectRollingIntervalSecSet(TSTextLogObject the_object, int rolling_interval_sec)
 .. function:: void TSTextLogObjectRollingOffsetHrSet(TSTextLogObject the_object, int rolling_offset_hr)
 .. function:: void TSTextLogObjectRollingSizeMbSet(TSTextLogObject the_object, int rolling_size_mb)
+.. function:: void TSTextLogObjectRollingMinCount(TSTextLogObject the_object, int rolling_min_count)
 
 Description
 ===========
