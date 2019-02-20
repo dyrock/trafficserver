@@ -8997,6 +8997,136 @@ TSSslContextDestroy(TSSslContext ctx)
   SSLReleaseContext(reinterpret_cast<SSL_CTX *>(ctx));
 }
 
+TSReturnCode
+TSSslClientCertUpdate(const char *path)
+{
+  if (nullptr == path) {
+    return TS_ERROR;
+  }
+  SSL_CTX *test_ctx       = SSL_CTX_new(SSLv23_client_method());
+  SSL_CTX *target_ctx     = nullptr;
+  SSLConfigParams *params = SSLConfig::acquire();
+
+  if (nullptr != params) {
+    if (!SSL_CTX_use_certificate_chain_file(test_ctx, path)) {
+      SSLError("failed to load client certificate from %s", path);
+      SSL_CTX_free(test_ctx);
+      return TS_ERROR;
+    }
+    if (!SSL_CTX_use_PrivateKey_file(test_ctx, path, SSL_FILETYPE_PEM)) {
+      SSLError("failed to load client private key file from %s", path);
+      SSL_CTX_free(test_ctx);
+      return TS_ERROR;
+    }
+    if (!SSL_CTX_check_private_key(test_ctx)) {
+      SSLError("client private key does not match the certificate public key %s", path);
+      SSL_CTX_free(test_ctx);
+      return TS_ERROR;
+    }
+    SSL_CTX_free(test_ctx);
+    auto &ctx_map    = params->ctx_map;
+    auto &ctxMapLock = params->ctxMapLock;
+    std::string key{path};
+    ink_mutex_acquire(&ctxMapLock);
+    auto iter = ctx_map.find(key);
+    if (iter != ctx_map.end()) {
+      target_ctx = iter->second;
+      if (!SSL_CTX_use_certificate_chain_file(target_ctx, path)) {
+        SSLError("failed to load client certificate from %s to SSL_CTX in ctx_map", path);
+        ink_mutex_release(&ctxMapLock);
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_use_PrivateKey_file(target_ctx, path, SSL_FILETYPE_PEM)) {
+        SSLError("failed to load client private key from %s to SSL_CTX in ctx_map. Context removed from map", path);
+        ctx_map.erase(iter);
+        SSL_CTX_free(target_ctx);
+        ink_mutex_release(&ctxMapLock);
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_check_private_key(test_ctx)) {
+        SSLError("failed to match private key with certificate from %s. Context removed from map.", path);
+        ctx_map.erase(iter);
+        SSL_CTX_free(target_ctx);
+        ink_mutex_release(&ctxMapLock);
+        return TS_ERROR;
+      }
+    }
+    ink_mutex_release(&ctxMapLock);
+  }
+
+  return TS_SUCCESS;
+}
+
+TSReturnCode
+TSSslServerCertUpdate(const char *path)
+{
+  if (nullptr == path) {
+    return TS_ERROR;
+  }
+  X509 *cert         = nullptr;
+  SSLCertContext *cc = nullptr;
+  SSL_CTX *ctx = nullptr, *target_ctx = nullptr;
+
+  SSLCertLookup *lookup = SSLCertificateConfig::acquire();
+
+  if (nullptr != lookup) {
+    // Read cert
+    scoped_BIO bio(BIO_new_file(path, "r"));
+    if (bio) {
+      cert = PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr);
+    }
+    if (!bio || !cert) {
+      SSLError("Failed to load certificate/key from %s", path);
+      return TS_ERROR;
+    }
+
+    // Extract common name
+    int pos                       = X509_NAME_get_index_by_NID(X509_get_subject_name(cert), NID_commonName, -1);
+    X509_NAME_ENTRY *common_name  = X509_NAME_get_entry(X509_get_subject_name(cert), pos);
+    ASN1_STRING *common_name_asn1 = X509_NAME_ENTRY_get_data(common_name);
+    char *common_name_str         = reinterpret_cast<char *>(const_cast<unsigned char *>(ASN1_STRING_get0_data(common_name_asn1)));
+    if (ASN1_STRING_length(common_name_asn1) != strlen(common_name_str)) {
+      // Embedded NULL char
+      return TS_ERROR;
+    }
+    // Update context to use cert
+    cc = lookup->find(common_name_str);
+    if (cc && cc->ctx) {
+      ctx = SSLDefaultServerContext();
+      if (!SSL_CTX_use_certificate(ctx, cert)) {
+        SSLError("Failed to assign cert from %s to SSL_CTX", path);
+        X509_free(cert);
+        SSLReleaseContext(ctx);
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_use_PrivateKey_file(ctx, path, SSL_FILETYPE_PEM)) {
+        SSLError("Failed to load server private key from %s", path);
+        SSLReleaseContext(ctx);
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_check_private_key(ctx)) {
+        SSLError("server private key does not match the certificate public key for %s", path);
+        SSLReleaseContext(ctx);
+        return TS_ERROR;
+      }
+      target_ctx = cc->ctx;
+      if (!SSL_CTX_use_certificate(target_ctx, cert)) {
+        SSLError("Failed to assign cert from %s to SSL_CTX in lookup table", path);
+        SSLReleaseContext(ctx);
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_use_PrivateKey_file(target_ctx, path, SSL_FILETYPE_PEM) || !SSL_CTX_check_private_key(target_ctx)) {
+        SSLError("Failed to load server private key from %s to SSL_CTX in lookup table", path);
+        SSLReleaseContext(ctx);
+        // ToDo: Clear target_ctx in lookup
+      }
+      SSLReleaseContext(ctx);
+      return TS_SUCCESS;
+    }
+  }
+  return TS_ERROR;
+}
+
 tsapi void
 TSSslTicketKeyUpdate(char *ticketData, int ticketDataLen)
 {
