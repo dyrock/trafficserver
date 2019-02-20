@@ -86,13 +86,13 @@ protected:
   const SSLConfigParams *_params;
 
 private:
-  virtual SSL_CTX *_store_ssl_ctx(SSLCertLookup *lookup, const SSLMultiCertConfigParams *ssl_multi_cert_params);
+  virtual SSL_CTX *_store_ssl_ctx(SSLCertLookup *lookup, const shared_SSLMultiCertConfigParams ssl_multi_cert_params);
   virtual void _set_handshake_callbacks(SSL_CTX *ctx);
 };
 
 // Create a new SSL server context fully configured.
 // Used by TS API (TSSslServerContextCreate)
-SSL_CTX *SSLCreateServerContext(const SSLConfigParams *params);
+SSL_CTX *SSLCreateServerContext(const SSLConfigParams *params, const SSLMultiCertConfigParams *sslMultiCertSettings);
 
 // Release SSL_CTX and the associated data. This works for both
 // client and server contexts and gracefully accepts nullptr.

@@ -49,6 +49,7 @@
 #include "P_Cache.h"
 #include "records/I_RecCore.h"
 #include "P_SSLConfig.h"
+#include "SSLDiags.h"
 #include "ProxyConfig.h"
 #include "Plugin.h"
 #include "LogObject.h"
@@ -8946,8 +8947,11 @@ TSSslContextFindByName(const char *name)
   SSLCertLookup *lookup = SSLCertificateConfig::acquire();
   if (lookup != nullptr) {
     SSLCertContext *cc = lookup->find(name);
-    if (cc && cc->ctx) {
-      ret = reinterpret_cast<TSSslContext>(cc->ctx);
+    if (cc) {
+      shared_SSL_CTX ctx = cc->getCtx();
+      if (ctx) {
+        ret = reinterpret_cast<TSSslContext>(ctx.get());
+      }
     }
     SSLCertificateConfig::release(lookup);
   }
@@ -8962,8 +8966,11 @@ TSSslContextFindByAddr(struct sockaddr const *addr)
     IpEndpoint ip;
     ip.assign(addr);
     SSLCertContext *cc = lookup->find(ip);
-    if (cc && cc->ctx) {
-      ret = reinterpret_cast<TSSslContext>(cc->ctx);
+    if (cc) {
+      shared_SSL_CTX ctx = cc->getCtx();
+      if (ctx) {
+        ret = reinterpret_cast<TSSslContext>(ctx.get());
+      }
     }
     SSLCertificateConfig::release(lookup);
   }
@@ -8976,7 +8983,7 @@ TSSslServerContextCreate(TSSslX509 cert, const char *certname)
   TSSslContext ret        = nullptr;
   SSLConfigParams *config = SSLConfig::acquire();
   if (config != nullptr) {
-    ret = reinterpret_cast<TSSslContext>(SSLCreateServerContext(config));
+    ret = reinterpret_cast<TSSslContext>(SSLCreateServerContext(config, nullptr));
 #if TS_USE_TLS_OCSP
     if (ret && SSLConfigParams::ssl_ocsp_enabled && cert && certname) {
       if (SSL_CTX_set_tlsext_status_cb(reinterpret_cast<SSL_CTX *>(ret), ssl_callback_ocsp_stapling)) {
@@ -8995,6 +9002,156 @@ tsapi void
 TSSslContextDestroy(TSSslContext ctx)
 {
   SSLReleaseContext(reinterpret_cast<SSL_CTX *>(ctx));
+}
+
+TSReturnCode
+TSSslClientCertUpdate(const char *cert_path, const char *key_path)
+{
+  if (nullptr == cert_path) {
+    return TS_ERROR;
+  }
+
+  std::string key;
+  SSL_CTX *test_ctx       = nullptr;
+  SSLConfigParams *params = SSLConfig::acquire();
+
+  // Generate second level key for client context lookup
+  ts::bwprint(key, "{}:{}", cert_path, key_path);
+  Debug("ssl.cert_update", "TSSslClientCertUpdate(): Use %.*s as key for lookup", static_cast<int>(key.size()), key.data());
+
+  // Use same file for key and cert if key file is not provided
+  if (nullptr == key_path) {
+    key_path = cert_path;
+  }
+
+  if (nullptr != params) {
+    // First try to update a default context with given cert/key to verify
+    test_ctx = SSL_CTX_new(SSLv23_client_method());
+    if (!SSL_CTX_use_certificate_chain_file(test_ctx, cert_path)) {
+      SSLError("failed to load client certificate from %s", cert_path);
+      SSL_CTX_free(test_ctx);
+      return TS_ERROR;
+    }
+    if (!SSL_CTX_use_PrivateKey_file(test_ctx, key_path, SSL_FILETYPE_PEM)) {
+      SSLError("failed to load client private key file from %s", key_path);
+      SSL_CTX_free(test_ctx);
+      return TS_ERROR;
+    }
+    if (!SSL_CTX_check_private_key(test_ctx)) {
+      SSLError("client private key does not match the certificate public key %s", cert_path);
+      SSL_CTX_free(test_ctx);
+      return TS_ERROR;
+    }
+    SSL_CTX_free(test_ctx);
+    test_ctx = nullptr;
+
+    // Try to update client contexts maps
+    auto &top_level_map = params->top_level_ctx_map;
+    auto &ctxMapLock    = params->ctxMapLock;
+
+    ink_mutex_acquire(&ctxMapLock);
+
+    // Traverse through top level of ca_bundle
+    for (auto &top_level_pair : top_level_map) {
+      auto &ctx_map_ptr = top_level_pair.second;
+      auto iter         = ctx_map_ptr->find(key);
+
+      if (iter == ctx_map_ptr->end() || iter->second == nullptr) {
+        // If key doesn't exist or there is no valid context to the key, do nothing
+        continue;
+      }
+
+      SSL_CTX *&target_ctx = iter->second;
+      if (!SSL_CTX_use_certificate_chain_file(target_ctx, cert_path)) {
+        SSLError("failed to load client certificate from %s to SSL_CTX in ctx_map", cert_path);
+        ink_mutex_release(&ctxMapLock);
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_use_PrivateKey_file(target_ctx, key_path, SSL_FILETYPE_PEM)) {
+        SSLError("failed to load client private key from %s to SSL_CTX in ctx_map. Context removed from map", key_path);
+        ctx_map_ptr->erase(iter);
+        SSL_CTX_free(target_ctx);
+        target_ctx = nullptr;
+        ink_mutex_release(&ctxMapLock);
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_check_private_key(target_ctx)) {
+        SSLError("failed to match private key with certificate from %s. Context removed from map.", cert_path);
+        ctx_map_ptr->erase(iter);
+        SSL_CTX_free(target_ctx);
+        target_ctx = nullptr;
+        ink_mutex_release(&ctxMapLock);
+        return TS_ERROR;
+      }
+    }
+    ink_mutex_release(&ctxMapLock);
+  }
+
+  return TS_SUCCESS;
+}
+
+TSReturnCode
+TSSslServerCertUpdate(const char *cert_path, const char *key_path)
+{
+  if (nullptr == cert_path) {
+    return TS_ERROR;
+  }
+  key_path = key_path ? key_path : cert_path;
+
+  SSLCertContext *cc      = nullptr;
+  shared_SSL_CTX test_ctx = nullptr;
+  std::unique_ptr<X509, decltype(&X509_free)> cert(nullptr, &X509_free);
+  SSLConfig::scoped_config config;
+  SSLCertificateConfig::scoped_config lookup;
+
+  if (lookup && config) {
+    // Read cert from path to extract lookup key (common name)
+    scoped_BIO bio(BIO_new_file(cert_path, "r"));
+    if (bio) {
+      cert.reset(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr));
+    }
+    if (!bio || !cert) {
+      SSLError("Failed to load certificate/key from %s", cert_path);
+      return TS_ERROR;
+    }
+
+    // Extract common name
+    int pos                       = X509_NAME_get_index_by_NID(X509_get_subject_name(cert.get()), NID_commonName, -1);
+    X509_NAME_ENTRY *common_name  = X509_NAME_get_entry(X509_get_subject_name(cert.get()), pos);
+    ASN1_STRING *common_name_asn1 = X509_NAME_ENTRY_get_data(common_name);
+    char *common_name_str         = reinterpret_cast<char *>(const_cast<unsigned char *>(ASN1_STRING_get0_data(common_name_asn1)));
+    if (ASN1_STRING_length(common_name_asn1) != static_cast<int>(strlen(common_name_str))) {
+      // Embedded NULL char
+      return TS_ERROR;
+    }
+    Debug("ssl.cert_update", "Updating from %s with common name %s", cert_path, common_name_str);
+
+    // Update context to use cert
+    cc = lookup->find(common_name_str);
+    if (cc && cc->getCtx()) {
+      test_ctx = shared_SSL_CTX(SSLCreateServerContext(config, cc->userconfig.get()), SSLReleaseContext);
+      if (!test_ctx) {
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_use_certificate_file(test_ctx.get(), cert_path, SSL_FILETYPE_PEM)) {
+        SSLError("Failed to assign cert from %s to SSL_CTX", cert_path);
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_use_PrivateKey_file(test_ctx.get(), key_path, SSL_FILETYPE_PEM)) {
+        SSLError("Failed to load server private key from %s", key_path);
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_check_private_key(test_ctx.get())) {
+        SSLError("server private key does not match the certificate public key for %s", cert_path);
+        return TS_ERROR;
+      }
+      // Atomic Swap
+      cc->setCtx(test_ctx);
+      return TS_SUCCESS;
+    }
+  }
+
+  return TS_ERROR;
 }
 
 tsapi void
