@@ -227,19 +227,44 @@ fail:
   return nullptr;
 #endif /* TS_HAVE_OPENSSL_SESSION_TICKETS */
 }
-void
-SSLCertContext::release()
-{
-  if (keyblock) {
-    ticket_block_free(keyblock);
-    keyblock = nullptr;
-  }
 
-  SSLReleaseContext(ctx);
-  ctx = nullptr;
+SSLCertContext::SSLCertContext(SSLCertContext const &other)
+{
+  opt        = other.opt;
+  userconfig = other.userconfig;
+  keyblock   = other.keyblock;
+  std::lock_guard<std::mutex> lock(other.ctx_mutex);
+  ctx = other.ctx;
 }
 
-SSLCertLookup::SSLCertLookup() : ssl_storage(new SSLContextStorage()) {}
+SSLCertContext &
+SSLCertContext::operator=(SSLCertContext const &other)
+{
+  if (&other != this) {
+    this->opt        = other.opt;
+    this->userconfig = other.userconfig;
+    this->keyblock   = other.keyblock;
+    std::lock_guard<std::mutex> lock(other.ctx_mutex);
+    this->ctx = other.ctx;
+  }
+  return *this;
+}
+
+shared_SSL_CTX
+SSLCertContext::getCtx()
+{
+  std::lock_guard<std::mutex> lock(ctx_mutex);
+  return ctx;
+}
+
+void
+SSLCertContext::setCtx(shared_SSL_CTX sc)
+{
+  std::lock_guard<std::mutex> lock(ctx_mutex);
+  ctx = sc;
+}
+
+SSLCertLookup::SSLCertLookup() : ssl_storage(new SSLContextStorage()), ssl_default(nullptr), is_valid(true) {}
 
 SSLCertLookup::~SSLCertLookup()
 {
@@ -313,27 +338,7 @@ make_to_lower_case(const char *name, char *lower_case_name, int buf_len)
 
 SSLContextStorage::SSLContextStorage() {}
 
-bool
-SSLCtxCompare(SSLCertContext const &cc1, SSLCertContext const &cc2)
-{
-  // Either they are both real ctx pointers and cc1 has the smaller pointer
-  // Or only cc2 has a non-null pointer
-  return cc1.ctx < cc2.ctx;
-}
-
-SSLContextStorage::~SSLContextStorage()
-{
-  // First sort the array so we can efficiently detect duplicates
-  // and avoid the double free
-  std::sort(ctx_store.begin(), ctx_store.end(), SSLCtxCompare);
-  SSL_CTX *last_ctx = nullptr;
-  for (auto &&it : this->ctx_store) {
-    if (it.ctx != last_ctx) {
-      last_ctx = it.ctx;
-      it.release();
-    }
-  }
-}
+SSLContextStorage::~SSLContextStorage() {}
 
 int
 SSLContextStorage::store(SSLCertContext const &cc)
@@ -359,6 +364,9 @@ SSLContextStorage::insert(const char *name, int idx)
   ats_wildcard_matcher wildcard;
   char lower_case_name[TS_MAX_HOST_NAME_LEN + 1];
   make_to_lower_case(name, lower_case_name, sizeof(lower_case_name));
+
+  shared_SSL_CTX ctx = this->ctx_store[idx].getCtx();
+
   if (wildcard.match(lower_case_name)) {
     // Strip the wildcard and store the subdomain
     const char *subdomain = index(lower_case_name, '*');
@@ -374,7 +382,7 @@ SSLContextStorage::insert(const char *name, int idx)
         idx = -1;
       } else {
         this->wilddomains.emplace(subdomain, idx);
-        Debug("ssl", "indexed '%s' with SSL_CTX %p [%d]", lower_case_name, this->ctx_store[idx].ctx, idx);
+        Debug("ssl", "indexed '%s' with SSL_CTX %p [%d]", lower_case_name, ctx.get(), idx);
       }
     }
   } else {
@@ -384,7 +392,7 @@ SSLContextStorage::insert(const char *name, int idx)
       idx = -1;
     } else {
       this->hostnames.emplace(lower_case_name, idx);
-      Debug("ssl", "indexed '%s' with SSL_CTX %p [%d]", lower_case_name, this->ctx_store[idx].ctx, idx);
+      Debug("ssl", "indexed '%s' with SSL_CTX %p [%d]", lower_case_name, ctx.get(), idx);
     }
   }
   return idx;

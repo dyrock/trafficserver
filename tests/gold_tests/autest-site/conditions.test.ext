@@ -43,7 +43,22 @@ def HasCurlFeature(self, feature):
         default,
         "Curl needs to support feature: {feature}".format(feature=feature)
     )
+def HasCurlOption(self, option):
+    def default(output):
+        tag = option.lower()
+        for line in output.splitlines():
+            line = line.lower()
+            tokens = line.split()
+            for t in tokens:
+                if t == tag:
+                    return True
+        return False
 
+    return self.CheckOutput(
+        ['curl', '--help'],
+        default,
+        "Curl needs to support option: {option}".format(option=option)
+    )
 
 def HasATSFeature(self, feature):
 
@@ -65,5 +80,6 @@ ExtendCondition(HasOpenSSLVersion)
 ExtendCondition(HasATSFeature)
 ExtendCondition(HasCurlVersion)
 ExtendCondition(HasCurlFeature)
+ExtendCondition(HasCurlOption)
 ExtendCondition(PluginExists)
 

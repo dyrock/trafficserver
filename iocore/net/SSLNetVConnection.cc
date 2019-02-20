@@ -999,7 +999,7 @@ SSLNetVConnection::sslStartHandShake(int event, int &err)
       // No data has been read at this point, so we can go
       // directly into blind tunnel mode
 
-      if (cc && SSLCertContext::OPT_TUNNEL == cc->opt) {
+      if (cc && SSLCertContextOption::OPT_TUNNEL == cc->opt) {
         if (this->is_transparent) {
           this->attributes   = HttpProxyPort::TRANSPORT_BLIND_TUNNEL;
           sslHandshakeStatus = SSL_HANDSHAKE_DONE;
