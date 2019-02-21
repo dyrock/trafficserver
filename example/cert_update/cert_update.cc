@@ -81,6 +81,6 @@ TSPluginInit(int argc, const char *argv[])
   if (TSPluginRegister(&info) != TS_SUCCESS) {
     TSError("[%s] Plugin registration failed", PLUGIN_NAME);
   }
-
+  TSDebug(PLUGIN_NAME, "Initialized.");
   TSLifecycleHookAdd(TS_LIFECYCLE_MSG_HOOK, TSContCreate(CB_cert_update, nullptr));
 }

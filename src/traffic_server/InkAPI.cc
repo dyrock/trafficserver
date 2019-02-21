@@ -9089,9 +9089,11 @@ TSSslServerCertUpdate(const char *path)
       // Embedded NULL char
       return TS_ERROR;
     }
+    Debug("ssl.cert_update", "Updating from %s with common name %s", path, common_name_str);
     // Update context to use cert
     cc = lookup->find(common_name_str);
     if (cc && cc->ctx) {
+      Debug("ssl.cert_update", "Found common name %s in lookup. Try updating a default context ...", common_name_str);
       ctx = SSLDefaultServerContext();
       if (!SSL_CTX_use_certificate(ctx, cert)) {
         SSLError("Failed to assign cert from %s to SSL_CTX", path);
@@ -9109,16 +9111,18 @@ TSSslServerCertUpdate(const char *path)
         SSLReleaseContext(ctx);
         return TS_ERROR;
       }
+      Debug("ssl.cert_update", "Update default context success. Try updating target context...");
       target_ctx = cc->ctx;
       if (!SSL_CTX_use_certificate(target_ctx, cert)) {
         SSLError("Failed to assign cert from %s to SSL_CTX in lookup table", path);
-        SSLReleaseContext(ctx);
         return TS_ERROR;
       }
       if (!SSL_CTX_use_PrivateKey_file(target_ctx, path, SSL_FILETYPE_PEM) || !SSL_CTX_check_private_key(target_ctx)) {
         SSLError("Failed to load server private key from %s to SSL_CTX in lookup table", path);
-        SSLReleaseContext(ctx);
-        // ToDo: Clear target_ctx in lookup
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_check_private_key(target_ctx)) {
+        SSLError("Server private key does not match the certificate public key for %s", path);
       }
       SSLReleaseContext(ctx);
       return TS_SUCCESS;
