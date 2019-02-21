@@ -9006,8 +9006,10 @@ TSSslClientCertUpdate(const char *path)
   SSL_CTX *test_ctx       = SSL_CTX_new(SSLv23_client_method());
   SSL_CTX *target_ctx     = nullptr;
   SSLConfigParams *params = SSLConfig::acquire();
+  std::string_view key{path};
 
   if (nullptr != params) {
+    Debug("ssl.cert_update", "Trying to update a default context with %s", path);
     if (!SSL_CTX_use_certificate_chain_file(test_ctx, path)) {
       SSLError("failed to load client certificate from %s", path);
       SSL_CTX_free(test_ctx);
@@ -9026,10 +9028,13 @@ TSSslClientCertUpdate(const char *path)
     SSL_CTX_free(test_ctx);
     auto &ctx_map    = params->ctx_map;
     auto &ctxMapLock = params->ctxMapLock;
-    std::string key{path};
+    int i            = key.find_last_of('/') + 1;
+    key              = key.substr(i, key.find_last_of('.') - i);
+    Debug("ssl.cert_update", "%.*s used as key", key.size(), key.data());
     ink_mutex_acquire(&ctxMapLock);
-    auto iter = ctx_map.find(key);
+    auto iter = ctx_map.find(std::string(key.data(), key.size()));
     if (iter != ctx_map.end()) {
+      Debug("ssl.cert_update", "%.*s found for client contexts. Trying to update with %s", key.size(), key.data(), path);
       target_ctx = iter->second;
       if (!SSL_CTX_use_certificate_chain_file(target_ctx, path)) {
         SSLError("failed to load client certificate from %s to SSL_CTX in ctx_map", path);
@@ -9043,13 +9048,14 @@ TSSslClientCertUpdate(const char *path)
         ink_mutex_release(&ctxMapLock);
         return TS_ERROR;
       }
-      if (!SSL_CTX_check_private_key(test_ctx)) {
+      if (!SSL_CTX_check_private_key(target_ctx)) {
         SSLError("failed to match private key with certificate from %s. Context removed from map.", path);
         ctx_map.erase(iter);
         SSL_CTX_free(target_ctx);
         ink_mutex_release(&ctxMapLock);
         return TS_ERROR;
       }
+      Debug("ssl.cert_update", "Successfully updated client context for %.*s", key.size(), key.data());
     }
     ink_mutex_release(&ctxMapLock);
   }
