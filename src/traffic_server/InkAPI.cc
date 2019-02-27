@@ -9005,10 +9005,13 @@ TSSslContextDestroy(TSSslContext ctx)
 }
 
 TSReturnCode
-TSSslClientCertUpdate(const char *path)
+TSSslClientCertUpdate(const char *cert_path, const char *key_path)
 {
-  if (nullptr == path) {
+  if (nullptr == cert_path) {
     return TS_ERROR;
+  }
+  if (nullptr == key_path) {
+    key_path = cert_path;
   }
   SSL_CTX *test_ctx       = SSL_CTX_new(SSLv23_client_method());
   SSL_CTX *target_ctx     = nullptr;
@@ -9033,12 +9036,16 @@ TSSslClientCertUpdate(const char *path)
       return TS_ERROR;
     }
     SSL_CTX_free(test_ctx);
-    auto &ctx_map    = params->ctx_map;
-    auto &ctxMapLock = params->ctxMapLock;
-    int i            = key.find_last_of('/') + 1;
-    key              = key.substr(i, key.find_last_of('.') - i);
+    auto &top_level_map = params->top_level_ctx_map;
+    auto &ctxMapLock    = params->ctxMapLock;
+    int i               = key.find_last_of('/') + 1;
+    key                 = key.substr(i, key.find_last_of('.') - i);
     Debug("ssl.cert_update", "%.*s used as key", key.size(), key.data());
+    ts::bwprint(key, "{}:{}", cert_path, key_path);
     ink_mutex_acquire(&ctxMapLock);
+    for (auto &ctx_map_ptr : top_level_ctx_map) {
+      auto iter = ctx_map_ptr->find();
+    }
     auto iter = ctx_map.find(std::string(key.data(), key.size()));
     if (iter != ctx_map.end()) {
       Debug("ssl.cert_update", "%.*s found for client contexts. Trying to update with %s", key.size(), key.data(), path);
@@ -9047,6 +9054,7 @@ TSSslClientCertUpdate(const char *path)
         SSLError("failed to load client certificate from %s to SSL_CTX in ctx_map", path);
         ink_mutex_release(&ctxMapLock);
         return TS_ERROR;
+        ß
       }
       if (!SSL_CTX_use_PrivateKey_file(target_ctx, path, SSL_FILETYPE_PEM)) {
         SSLError("failed to load client private key from %s to SSL_CTX in ctx_map. Context removed from map", path);
