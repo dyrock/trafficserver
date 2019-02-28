@@ -49,6 +49,7 @@
 #include "P_Cache.h"
 #include "records/I_RecCore.h"
 #include "P_SSLConfig.h"
+#include "SSLDiags.h"
 #include "ProxyConfig.h"
 #include "Plugin.h"
 #include "LogObject.h"
@@ -9009,61 +9010,61 @@ TSSslClientCertUpdate(const char *cert_path, const char *key_path)
   SSL_CTX *test_ctx       = SSL_CTX_new(SSLv23_client_method());
   SSL_CTX *target_ctx     = nullptr;
   SSLConfigParams *params = SSLConfig::acquire();
-  std::string_view key{path};
+  std::string key;
 
   if (nullptr != params) {
-    Debug("ssl.cert_update", "Trying to update a default context with %s", path);
-    if (!SSL_CTX_use_certificate_chain_file(test_ctx, path)) {
-      SSLError("failed to load client certificate from %s", path);
+    Debug("ssl.cert_update", "Trying to update a default context with %s", cert_path);
+    if (!SSL_CTX_use_certificate_chain_file(test_ctx, cert_path)) {
+      SSLError("failed to load client certificate from %s", cert_path);
       SSL_CTX_free(test_ctx);
       return TS_ERROR;
     }
-    if (!SSL_CTX_use_PrivateKey_file(test_ctx, path, SSL_FILETYPE_PEM)) {
-      SSLError("failed to load client private key file from %s", path);
+    if (!SSL_CTX_use_PrivateKey_file(test_ctx, key_path, SSL_FILETYPE_PEM)) {
+      SSLError("failed to load client private key file from %s", key_path);
       SSL_CTX_free(test_ctx);
       return TS_ERROR;
     }
     if (!SSL_CTX_check_private_key(test_ctx)) {
-      SSLError("client private key does not match the certificate public key %s", path);
+      SSLError("client private key does not match the certificate public key %s", cert_path);
       SSL_CTX_free(test_ctx);
       return TS_ERROR;
     }
     SSL_CTX_free(test_ctx);
     auto &top_level_map = params->top_level_ctx_map;
     auto &ctxMapLock    = params->ctxMapLock;
-    int i               = key.find_last_of('/') + 1;
-    key                 = key.substr(i, key.find_last_of('.') - i);
-    Debug("ssl.cert_update", "%.*s used as key", key.size(), key.data());
+
     ts::bwprint(key, "{}:{}", cert_path, key_path);
     ink_mutex_acquire(&ctxMapLock);
-    for (auto &ctx_map_ptr : top_level_ctx_map) {
-      auto iter = ctx_map_ptr->find();
-    }
-    auto iter = ctx_map.find(std::string(key.data(), key.size()));
-    if (iter != ctx_map.end()) {
-      Debug("ssl.cert_update", "%.*s found for client contexts. Trying to update with %s", key.size(), key.data(), path);
+    for (auto &top_level_pair : top_level_map) {
+      Debug("ssl.cert_update", "Checking %s in top level", top_level_pair.first.c_str());
+      auto &ctx_map_ptr = top_level_pair.second;
+      auto iter = ctx_map_ptr->find(key);
+      if (iter == ctx_map_ptr->end() || iter->second == nullptr) {
+        continue;
+      }
+
+      Debug("ssl.cert_update", "%s found for client contexts. Trying to update with %s", key.c_str(), cert_path);
       target_ctx = iter->second;
-      if (!SSL_CTX_use_certificate_chain_file(target_ctx, path)) {
-        SSLError("failed to load client certificate from %s to SSL_CTX in ctx_map", path);
+      if (!SSL_CTX_use_certificate_chain_file(target_ctx, cert_path)) {
+        SSLError("failed to load client certificate from %s to SSL_CTX in ctx_map", cert_path);
         ink_mutex_release(&ctxMapLock);
         return TS_ERROR;
-        ß
       }
-      if (!SSL_CTX_use_PrivateKey_file(target_ctx, path, SSL_FILETYPE_PEM)) {
-        SSLError("failed to load client private key from %s to SSL_CTX in ctx_map. Context removed from map", path);
-        ctx_map.erase(iter);
+      if (!SSL_CTX_use_PrivateKey_file(target_ctx, key_path, SSL_FILETYPE_PEM)) {
+        SSLError("failed to load client private key from %s to SSL_CTX in ctx_map. Context removed from map", key_path);
+        ctx_map_ptr->erase(iter);
         SSL_CTX_free(target_ctx);
         ink_mutex_release(&ctxMapLock);
         return TS_ERROR;
       }
       if (!SSL_CTX_check_private_key(target_ctx)) {
-        SSLError("failed to match private key with certificate from %s. Context removed from map.", path);
-        ctx_map.erase(iter);
+        SSLError("failed to match private key with certificate from %s. Context removed from map.", cert_path);
+        ctx_map_ptr->erase(iter);
         SSL_CTX_free(target_ctx);
         ink_mutex_release(&ctxMapLock);
         return TS_ERROR;
       }
-      Debug("ssl.cert_update", "Successfully updated client context for %.*s", key.size(), key.data());
+      Debug("ssl.cert_update", "Successfully updated client context for %.*s", key.c_str());
     }
     ink_mutex_release(&ctxMapLock);
   }
