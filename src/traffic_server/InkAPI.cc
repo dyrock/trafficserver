@@ -9011,16 +9011,23 @@ TSSslClientCertUpdate(const char *cert_path, const char *key_path)
   if (nullptr == cert_path) {
     return TS_ERROR;
   }
+
+  std::string key;
+  SSL_CTX *test_ctx       = nullptr;
+  SSLConfigParams *params = SSLConfig::acquire();
+
+  // Generate second level key for client context lookup
+  ts::bwprint(key, "{}:{}", cert_path, key_path);
+  Debug("ssl.cert_update", "TSSslClientCertUpdate(): Use %.*s as key for lookup", static_cast<int>(key.size()), key.data());
+
+  // Use same file for key and cert if key file is not provided
   if (nullptr == key_path) {
     key_path = cert_path;
   }
-  SSL_CTX *test_ctx       = SSL_CTX_new(SSLv23_client_method());
-  SSL_CTX *target_ctx     = nullptr;
-  SSLConfigParams *params = SSLConfig::acquire();
-  std::string key;
 
   if (nullptr != params) {
-    Debug("ssl.cert_update", "Trying to update a default context with %s", cert_path);
+    // First try to update a default context with given cert/key to verify
+    test_ctx = SSL_CTX_new(SSLv23_client_method());
     if (!SSL_CTX_use_certificate_chain_file(test_ctx, cert_path)) {
       SSLError("failed to load client certificate from %s", cert_path);
       SSL_CTX_free(test_ctx);
@@ -9037,21 +9044,25 @@ TSSslClientCertUpdate(const char *cert_path, const char *key_path)
       return TS_ERROR;
     }
     SSL_CTX_free(test_ctx);
+    test_ctx = nullptr;
+
+    // Try to update client contexts maps
     auto &top_level_map = params->top_level_ctx_map;
     auto &ctxMapLock    = params->ctxMapLock;
 
-    ts::bwprint(key, "{}:{}", cert_path, key_path);
     ink_mutex_acquire(&ctxMapLock);
+
+    // Traverse through top level of ca_bundle
     for (auto &top_level_pair : top_level_map) {
-      Debug("ssl.cert_update", "Checking %s in top level", top_level_pair.first.c_str());
       auto &ctx_map_ptr = top_level_pair.second;
-      auto iter = ctx_map_ptr->find(key);
+      auto iter         = ctx_map_ptr->find(key);
+
       if (iter == ctx_map_ptr->end() || iter->second == nullptr) {
+        // If key doesn't exist or there is no valid context to the key, do nothing
         continue;
       }
 
-      Debug("ssl.cert_update", "%s found for client contexts. Trying to update with %s", key.c_str(), cert_path);
-      target_ctx = iter->second;
+      SSL_CTX *&target_ctx = iter->second;
       if (!SSL_CTX_use_certificate_chain_file(target_ctx, cert_path)) {
         SSLError("failed to load client certificate from %s to SSL_CTX in ctx_map", cert_path);
         ink_mutex_release(&ctxMapLock);
@@ -9061,6 +9072,7 @@ TSSslClientCertUpdate(const char *cert_path, const char *key_path)
         SSLError("failed to load client private key from %s to SSL_CTX in ctx_map. Context removed from map", key_path);
         ctx_map_ptr->erase(iter);
         SSL_CTX_free(target_ctx);
+        target_ctx = nullptr;
         ink_mutex_release(&ctxMapLock);
         return TS_ERROR;
       }
@@ -9068,10 +9080,10 @@ TSSslClientCertUpdate(const char *cert_path, const char *key_path)
         SSLError("failed to match private key with certificate from %s. Context removed from map.", cert_path);
         ctx_map_ptr->erase(iter);
         SSL_CTX_free(target_ctx);
+        target_ctx = nullptr;
         ink_mutex_release(&ctxMapLock);
         return TS_ERROR;
       }
-      Debug("ssl.cert_update", "Successfully updated client context for %.*s", key.c_str());
     }
     ink_mutex_release(&ctxMapLock);
   }
@@ -9080,25 +9092,27 @@ TSSslClientCertUpdate(const char *cert_path, const char *key_path)
 }
 
 TSReturnCode
-TSSslServerCertUpdate(const char *path)
+TSSslServerCertUpdate(const char *cert_path, const char *key_path)
 {
-  if (nullptr == path) {
+  if (nullptr == cert_path) {
     return TS_ERROR;
   }
-  X509 *cert         = nullptr;
-  SSLCertContext *cc = nullptr;
-  SSL_CTX *ctx = nullptr, *target_ctx = nullptr;
+  key_path = key_path ? key_path : cert_path;
 
+  X509 *cert            = nullptr;
+  SSL_CTX *test_ctx     = nullptr;
+  SSL_CTX *target_ctx   = nullptr;
+  SSLCertContext *cc    = nullptr;
   SSLCertLookup *lookup = SSLCertificateConfig::acquire();
 
   if (nullptr != lookup) {
-    // Read cert
-    scoped_BIO bio(BIO_new_file(path, "r"));
+    // Read cert from path to extract lookup key (common name)
+    scoped_BIO bio(BIO_new_file(cert_path, "r"));
     if (bio) {
       cert = PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr);
     }
     if (!bio || !cert) {
-      SSLError("Failed to load certificate/key from %s", path);
+      SSLError("Failed to load certificate/key from %s", cert_path);
       return TS_ERROR;
     }
 
@@ -9107,46 +9121,47 @@ TSSslServerCertUpdate(const char *path)
     X509_NAME_ENTRY *common_name  = X509_NAME_get_entry(X509_get_subject_name(cert), pos);
     ASN1_STRING *common_name_asn1 = X509_NAME_ENTRY_get_data(common_name);
     char *common_name_str         = reinterpret_cast<char *>(const_cast<unsigned char *>(ASN1_STRING_get0_data(common_name_asn1)));
-    if (ASN1_STRING_length(common_name_asn1) != strlen(common_name_str)) {
+    if (ASN1_STRING_length(common_name_asn1) != static_cast<int>(strlen(common_name_str))) {
       // Embedded NULL char
       return TS_ERROR;
     }
-    Debug("ssl.cert_update", "Updating from %s with common name %s", path, common_name_str);
+    Debug("ssl.cert_update", "Updating from %s with common name %s", cert_path, common_name_str);
+
     // Update context to use cert
     cc = lookup->find(common_name_str);
     if (cc && cc->ctx) {
-      Debug("ssl.cert_update", "Found common name %s in lookup. Try updating a default context ...", common_name_str);
-      ctx = SSLDefaultServerContext();
-      if (!SSL_CTX_use_certificate(ctx, cert)) {
-        SSLError("Failed to assign cert from %s to SSL_CTX", path);
+      // First try to update on a default context to verify
+      test_ctx = SSLDefaultServerContext();
+      if (!SSL_CTX_use_certificate(test_ctx, cert)) {
+        SSLError("Failed to assign cert from %s to SSL_CTX", cert_path);
         X509_free(cert);
-        SSLReleaseContext(ctx);
+        SSLReleaseContext(test_ctx);
         return TS_ERROR;
       }
-      if (!SSL_CTX_use_PrivateKey_file(ctx, path, SSL_FILETYPE_PEM)) {
-        SSLError("Failed to load server private key from %s", path);
-        SSLReleaseContext(ctx);
+      if (!SSL_CTX_use_PrivateKey_file(test_ctx, key_path, SSL_FILETYPE_PEM)) {
+        SSLError("Failed to load server private key from %s", key_path);
+        SSLReleaseContext(test_ctx);
         return TS_ERROR;
       }
-      if (!SSL_CTX_check_private_key(ctx)) {
-        SSLError("server private key does not match the certificate public key for %s", path);
-        SSLReleaseContext(ctx);
+      if (!SSL_CTX_check_private_key(test_ctx)) {
+        SSLError("server private key does not match the certificate public key for %s", cert_path);
+        SSLReleaseContext(test_ctx);
         return TS_ERROR;
       }
-      Debug("ssl.cert_update", "Update default context success. Try updating target context...");
+      // update on the context found from lookup table
       target_ctx = cc->ctx;
       if (!SSL_CTX_use_certificate(target_ctx, cert)) {
-        SSLError("Failed to assign cert from %s to SSL_CTX in lookup table", path);
+        SSLError("Failed to assign cert from %s to SSL_CTX in lookup table", cert_path);
         return TS_ERROR;
       }
-      if (!SSL_CTX_use_PrivateKey_file(target_ctx, path, SSL_FILETYPE_PEM) || !SSL_CTX_check_private_key(target_ctx)) {
-        SSLError("Failed to load server private key from %s to SSL_CTX in lookup table", path);
+      if (!SSL_CTX_use_PrivateKey_file(target_ctx, key_path, SSL_FILETYPE_PEM)) {
+        SSLError("Failed to load server private key from %s to SSL_CTX in lookup table", key_path);
         return TS_ERROR;
       }
       if (!SSL_CTX_check_private_key(target_ctx)) {
-        SSLError("Server private key does not match the certificate public key for %s", path);
+        SSLError("Server private key does not match the certificate public key for %s", cert_path);
       }
-      SSLReleaseContext(ctx);
+      SSLReleaseContext(test_ctx);
       return TS_SUCCESS;
     }
   }
