@@ -53,14 +53,14 @@ CB_cert_update(TSCont, TSEvent, void *edata)
   }
 
   if (server_cert_path) {
-    if (TS_SUCCESS == TSSslServerCertUpdate(server_cert_path)) {
+    if (TS_SUCCESS == TSSslServerCertUpdate(server_cert_path, nullptr)) {
       TSDebug(PLUGIN_NAME, "Successfully updated server cert with %s", server_cert_path);
     } else {
       TSDebug(PLUGIN_NAME, "Failed to update server cert with %s", server_cert_path);
     }
   }
   if (client_cert_path) {
-    if (TS_SUCCESS == TSSslClientCertUpdate(client_cert_path)) {
+    if (TS_SUCCESS == TSSslClientCertUpdate(client_cert_path, nullptr)) {
       TSDebug(PLUGIN_NAME, "Successfully updated client cert with %s", client_cert_path);
     } else {
       TSDebug(PLUGIN_NAME, "Failed to update client cert with %s", client_cert_path);
