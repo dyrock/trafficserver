@@ -52,29 +52,42 @@ struct ssl_ticket_key_block {
 
 */
 struct SSLCertContext {
-  /** Special things to do instead of use a context.
-      In general an option will be associated with a @c nullptr context because
-      the context is not used.
-  */
-  enum Option {
-    OPT_NONE,  ///< Nothing special. Implies valid context.
-    OPT_TUNNEL ///< Just tunnel, don't terminate.
-  };
+private:
+  mutable std::mutex ctx_mutex;
+  shared_SSL_CTX ctx;
 
-  SSLCertContext() : ctx(nullptr), opt(OPT_NONE), keyblock(nullptr) {}
-  explicit SSLCertContext(SSL_CTX *c) : ctx(c), opt(OPT_NONE), keyblock(nullptr) {}
-  SSLCertContext(SSL_CTX *c, Option o) : ctx(c), opt(o), keyblock(nullptr) {}
-  SSLCertContext(SSL_CTX *c, Option o, ssl_ticket_key_block *kb) : ctx(c), opt(o), keyblock(kb) {}
+public:
+  SSLCertContext() : ctx_mutex(), ctx(nullptr), opt(SSLCertContextOption::OPT_NONE), userconfig(nullptr), keyblock(nullptr) {}
+  explicit SSLCertContext(SSL_CTX *c)
+    : ctx_mutex(), ctx(c, SSL_CTX_free), opt(SSLCertContextOption::OPT_NONE), userconfig(nullptr), keyblock(nullptr)
+  {
+  }
+  SSLCertContext(shared_SSL_CTX sc, SSLCertContextOption o) : ctx_mutex(), ctx(sc), opt(o), userconfig(nullptr), keyblock(nullptr)
+  {
+  }
+  SSLCertContext(shared_SSL_CTX sc, SSLCertContextOption o, shared_ssl_user_config u)
+    : ctx_mutex(), ctx(sc), opt(o), userconfig(u), keyblock(nullptr)
+  {
+  }
+  SSLCertContext(shared_SSL_CTX sc, SSLCertContextOption o, shared_ssl_user_config u, ssl_ticket_key_block *kb)
+    : ctx_mutex(), ctx(sc), opt(o), userconfig(u), keyblock(kb)
+  {
+  }
+  SSLCertContext(SSLCertContext const &other);
+  SSLCertContext &operator=(SSLCertContext const &other);
+
+  shared_SSL_CTX getCtx();
+  void setCtx(shared_SSL_CTX sc);
   void release();
 
-  SSL_CTX *ctx;                   ///< openSSL context.
-  Option opt;                     ///< Special handling option.
-  ssl_ticket_key_block *keyblock; ///< session keys associated with this address
+  SSLCertContextOption opt;          ///< Special handling option.
+  shared_ssl_user_config userconfig; ///< User provided settings
+  ssl_ticket_key_block *keyblock;    ///< session keys associated with this address
 };
 
 struct SSLCertLookup : public ConfigInfo {
   SSLContextStorage *ssl_storage;
-  SSL_CTX *ssl_default;
+  shared_SSL_CTX ssl_default;
   bool is_valid;
 
   int insert(const char *name, SSLCertContext const &cc);
@@ -97,7 +110,7 @@ struct SSLCertLookup : public ConfigInfo {
   SSL_CTX *
   defaultContext() const
   {
-    return ssl_default;
+    return ssl_default.get();
   }
 
   unsigned count() const;

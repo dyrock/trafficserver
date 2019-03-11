@@ -8947,8 +8947,11 @@ TSSslContextFindByName(const char *name)
   SSLCertLookup *lookup = SSLCertificateConfig::acquire();
   if (lookup != nullptr) {
     SSLCertContext *cc = lookup->find(name);
-    if (cc && cc->ctx) {
-      ret = reinterpret_cast<TSSslContext>(cc->ctx);
+    if (cc) {
+      shared_SSL_CTX ctx = cc->getCtx();
+      if (ctx) {
+        ret = reinterpret_cast<TSSslContext>(ctx.get());
+      }
     }
     SSLCertificateConfig::release(lookup);
   }
@@ -8963,8 +8966,11 @@ TSSslContextFindByAddr(struct sockaddr const *addr)
     IpEndpoint ip;
     ip.assign(addr);
     SSLCertContext *cc = lookup->find(ip);
-    if (cc && cc->ctx) {
-      ret = reinterpret_cast<TSSslContext>(cc->ctx);
+    if (cc) {
+      shared_SSL_CTX ctx = cc->getCtx();
+      if (ctx) {
+        ret = reinterpret_cast<TSSslContext>(ctx.get());
+      }
     }
     SSLCertificateConfig::release(lookup);
   }
@@ -9092,17 +9098,17 @@ TSSslServerCertUpdate(const char *cert_path, const char *key_path)
   }
   key_path = key_path ? key_path : cert_path;
 
-  X509 *cert            = nullptr;
-  SSL_CTX *test_ctx     = nullptr;
-  SSL_CTX *target_ctx   = nullptr;
-  SSLCertContext *cc    = nullptr;
-  SSLCertLookup *lookup = SSLCertificateConfig::acquire();
+  SSLCertContext *cc      = nullptr;
+  shared_SSL_CTX test_ctx = nullptr;
+  std::unique_ptr<X509, decltype(&X509_free)> cert(nullptr, &X509_free);
+  SSLConfig::scoped_config config;
+  SSLCertificateConfig::scoped_config lookup;
 
-  if (nullptr != lookup) {
+  if (lookup && config) {
     // Read cert from path to extract lookup key (common name)
     scoped_BIO bio(BIO_new_file(cert_path, "r"));
     if (bio) {
-      cert = PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr);
+      cert.reset(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr));
     }
     if (!bio || !cert) {
       SSLError("Failed to load certificate/key from %s", cert_path);
@@ -9110,8 +9116,8 @@ TSSslServerCertUpdate(const char *cert_path, const char *key_path)
     }
 
     // Extract common name
-    int pos                       = X509_NAME_get_index_by_NID(X509_get_subject_name(cert), NID_commonName, -1);
-    X509_NAME_ENTRY *common_name  = X509_NAME_get_entry(X509_get_subject_name(cert), pos);
+    int pos                       = X509_NAME_get_index_by_NID(X509_get_subject_name(cert.get()), NID_commonName, -1);
+    X509_NAME_ENTRY *common_name  = X509_NAME_get_entry(X509_get_subject_name(cert.get()), pos);
     ASN1_STRING *common_name_asn1 = X509_NAME_ENTRY_get_data(common_name);
     char *common_name_str         = reinterpret_cast<char *>(const_cast<unsigned char *>(ASN1_STRING_get0_data(common_name_asn1)));
     if (ASN1_STRING_length(common_name_asn1) != static_cast<int>(strlen(common_name_str))) {
@@ -9122,42 +9128,29 @@ TSSslServerCertUpdate(const char *cert_path, const char *key_path)
 
     // Update context to use cert
     cc = lookup->find(common_name_str);
-    if (cc && cc->ctx) {
-      // First try to update on a default context to verify
-      test_ctx = SSLDefaultServerContext();
-      if (!SSL_CTX_use_certificate(test_ctx, cert)) {
+    if (cc && cc->getCtx()) {
+      test_ctx = shared_SSL_CTX(SSLCreateServerContext(config, cc->userconfig.get()), SSLReleaseContext);
+      if (!test_ctx) {
+        return TS_ERROR;
+      }
+      if (!SSL_CTX_use_certificate_file(test_ctx.get(), cert_path, SSL_FILETYPE_PEM)) {
         SSLError("Failed to assign cert from %s to SSL_CTX", cert_path);
-        X509_free(cert);
-        SSLReleaseContext(test_ctx);
         return TS_ERROR;
       }
-      if (!SSL_CTX_use_PrivateKey_file(test_ctx, key_path, SSL_FILETYPE_PEM)) {
+      if (!SSL_CTX_use_PrivateKey_file(test_ctx.get(), key_path, SSL_FILETYPE_PEM)) {
         SSLError("Failed to load server private key from %s", key_path);
-        SSLReleaseContext(test_ctx);
         return TS_ERROR;
       }
-      if (!SSL_CTX_check_private_key(test_ctx)) {
+      if (!SSL_CTX_check_private_key(test_ctx.get())) {
         SSLError("server private key does not match the certificate public key for %s", cert_path);
-        SSLReleaseContext(test_ctx);
         return TS_ERROR;
       }
-      // update on the context found from lookup table
-      target_ctx = cc->ctx;
-      if (!SSL_CTX_use_certificate(target_ctx, cert)) {
-        SSLError("Failed to assign cert from %s to SSL_CTX in lookup table", cert_path);
-        return TS_ERROR;
-      }
-      if (!SSL_CTX_use_PrivateKey_file(target_ctx, key_path, SSL_FILETYPE_PEM)) {
-        SSLError("Failed to load server private key from %s to SSL_CTX in lookup table", key_path);
-        return TS_ERROR;
-      }
-      if (!SSL_CTX_check_private_key(target_ctx)) {
-        SSLError("Server private key does not match the certificate public key for %s", cert_path);
-      }
-      SSLReleaseContext(test_ctx);
+      // Atomic Swap
+      cc->setCtx(test_ctx);
       return TS_SUCCESS;
     }
   }
+
   return TS_ERROR;
 }
 
