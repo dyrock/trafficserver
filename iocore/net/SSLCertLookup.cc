@@ -250,6 +250,11 @@ SSLCertContext::operator=(SSLCertContext const &other)
   return *this;
 }
 
+SSLCertContext::~SSLCertContext()
+{
+  this->release();
+}
+
 shared_SSL_CTX
 SSLCertContext::getCtx()
 {

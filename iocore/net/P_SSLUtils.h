@@ -37,47 +37,6 @@
 struct SSLConfigParams;
 class SSLNetVConnection;
 
-/** Special things to do instead of use a context.
-    In general an option will be associated with a @c nullptr context because
-    the context is not used.
-*/
-enum SSLCertContextOption {
-  OPT_NONE,  ///< Nothing special. Implies valid context.
-  OPT_TUNNEL ///< Just tunnel, don't terminate.
-};
-
-/*
- * struct ssl_user_config: gather user provided settings from ssl_multicert.config in to this single struct
- * ssl_ticket_enabled - session ticket enabled
- * ssl_cert_name - certificate
- * dest_ip - IPv[64] address to match
- * ssl_cert_name - certificate
- * first_cert - the first certificate name when multiple cert files are in 'ssl_cert_name'
- * ssl_ca_name - CA public certificate
- * ssl_key_name - Private key
- * ticket_key_name - session key file. [key_name (16Byte) + HMAC_secret (16Byte) + AES_key (16Byte)]
- * ssl_key_dialog - Private key dialog
- * servername - Destination server
- */
-struct ssl_user_config {
-  ssl_user_config() : opt(SSLCertContextOption::OPT_NONE)
-  {
-    REC_ReadConfigInt32(session_ticket_enabled, "proxy.config.ssl.server.session_ticket.enable");
-  }
-  int session_ticket_enabled;
-  ats_scoped_str addr;
-  ats_scoped_str cert;
-  ats_scoped_str first_cert;
-  ats_scoped_str ca;
-  ats_scoped_str key;
-  ats_scoped_str dialog;
-  ats_scoped_str servername;
-  SSLCertContextOption opt;
-};
-
-using shared_ssl_user_config = std::shared_ptr<ssl_user_config>;
-using shared_SSL_CTX         = std::shared_ptr<SSL_CTX>;
-
 typedef int ssl_error_t;
 
 /**
@@ -127,13 +86,13 @@ protected:
   const SSLConfigParams *_params;
 
 private:
-  virtual SSL_CTX *_store_ssl_ctx(SSLCertLookup *lookup, const SSLMultiCertConfigParams *ssl_multi_cert_params);
+  virtual SSL_CTX *_store_ssl_ctx(SSLCertLookup *lookup, const shared_SSLMultiCertConfigParams ssl_multi_cert_params);
   virtual void _set_handshake_callbacks(SSL_CTX *ctx);
 };
 
 // Create a new SSL server context fully configured.
 // Used by TS API (TSSslServerContextCreate)
-SSL_CTX *SSLCreateServerContext(const SSLConfigParams *params);
+SSL_CTX *SSLCreateServerContext(const SSLConfigParams *params, const SSLMultiCertConfigParams *sslMultiCertSettings);
 
 // Release SSL_CTX and the associated data. This works for both
 // client and server contexts and gracefully accepts nullptr.

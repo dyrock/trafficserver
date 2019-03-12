@@ -302,7 +302,7 @@ set_context_cert(SSL *ssl)
     if (cc) {
       ctx = cc->getCtx();
     }
-    if (cc && ctx && SSLCertContextOption::OPT_TUNNEL == cc->opt && netvc->get_is_transparent()) {
+    if (cc && ctx && SSLCertContext::OPT_TUNNEL == cc->opt && netvc->get_is_transparent()) {
       netvc->attributes = HttpProxyPort::TRANSPORT_BLIND_TUNNEL;
       netvc->setSSLHandShakeComplete(SSL_HANDSHAKE_DONE);
       retval = -1;
@@ -1394,12 +1394,12 @@ fail:
 }
 
 SSL_CTX *
-SSLCreateServerContext(const SSLConfigParams *params, const ssl_user_config *sslMultiCertSettings)
+SSLCreateServerContext(const SSLConfigParams *params, const SSLMultiCertConfigParams *sslMultiCertSettings)
 {
   SSLMultiCertConfigLoader loader(params);
   std::vector<X509 *> cert_list;
 
-  SSL_CTX *ctx = loader.init_server_ssl_ctx(cert_list, nullptr);
+  SSL_CTX *ctx = loader.init_server_ssl_ctx(cert_list, sslMultiCertSettings);
   ink_assert(cert_list.empty());
 
   return ctx;
@@ -1410,13 +1410,12 @@ SSLCreateServerContext(const SSLConfigParams *params, const ssl_user_config *ssl
    Do NOT call SSL_CTX_set_* functions from here. SSL_CTX should be set up by SSLMultiCertConfigLoader::init_server_ssl_ctx().
  */
 SSL_CTX *
-SSLMultiCertConfigLoader::_store_ssl_ctx(SSLCertLookup *lookup, const SSLMultiCertConfigParams *sslMultCertSettings)
+SSLMultiCertConfigLoader::_store_ssl_ctx(SSLCertLookup *lookup, const shared_SSLMultiCertConfigParams sslMultCertSettings)
 {
   std::vector<X509 *> cert_list;
-  SSL_CTX *ctx                   = this->init_server_ssl_ctx(cert_list, sslMultCertSettings);
   ssl_ticket_key_block *keyblock = nullptr;
   bool inserted                  = false;
-  shared_SSL_CTX ctx(SSLInitServerContext(params, sslMultCertSettings.get(), cert_list), SSL_CTX_free);
+  shared_SSL_CTX ctx(this->init_server_ssl_ctx(cert_list, sslMultCertSettings.get()), SSL_CTX_free);
 
   if (!ctx || !sslMultCertSettings) {
     lookup->is_valid = false;
@@ -1445,7 +1444,7 @@ SSLMultiCertConfigLoader::_store_ssl_ctx(SSLCertLookup *lookup, const SSLMultiCe
           0) {
         inserted            = true;
         lookup->ssl_default = ctx;
-        this->_set_handshake_callbacks(ctx);
+        this->_set_handshake_callbacks(ctx.get());
       }
     } else {
       IpEndpoint ep;
@@ -1493,11 +1492,11 @@ SSLMultiCertConfigLoader::_store_ssl_ctx(SSLCertLookup *lookup, const SSLMultiCe
     X509_free(i);
   }
 
-  return ctx;
+  return ctx.get();
 }
 
 static bool
-ssl_extract_certificate(const matcher_line *line_info, SSLMultiCertConfigParams &sslMultCertSettings)
+ssl_extract_certificate(const matcher_line *line_info, SSLMultiCertConfigParams *sslMultCertSettings)
 {
   for (int i = 0; i < MATCHER_MAX_TOKENS; ++i) {
     const char *label;
@@ -1540,7 +1539,7 @@ ssl_extract_certificate(const matcher_line *line_info, SSLMultiCertConfigParams 
 
     if (strcasecmp(label, SSL_ACTION_TAG) == 0) {
       if (strcasecmp(SSL_ACTION_TUNNEL_TAG, value) == 0) {
-        sslMultCertSettings->opt = SSLCertContextOption::OPT_TUNNEL;
+        sslMultCertSettings->opt = SSLCertContext::OPT_TUNNEL;
       } else {
         Error("Unrecognized action for %s", SSL_ACTION_TAG.data());
         return false;
@@ -1599,7 +1598,7 @@ SSLMultiCertConfigLoader::load(SSLCertLookup *lookup)
     }
 
     if (*line != '\0' && *line != '#') {
-      SSLMultiCertConfigParams sslMultiCertSettings;
+      shared_SSLMultiCertConfigParams sslMultiCertSettings(new SSLMultiCertConfigParams);
       const char *errPtr;
 
       errPtr = parseConfigLine(line, &line_info, &sslCertTags);
@@ -1610,8 +1609,8 @@ SSLMultiCertConfigLoader::load(SSLCertLookup *lookup)
       } else {
         if (ssl_extract_certificate(&line_info, sslMultiCertSettings.get())) {
           // There must be a certificate specified unless the tunnel action is set
-          if (sslMultiCertSettings.cert || sslMultiCertSettings.opt != SSLCertContext::OPT_TUNNEL) {
-            this->_store_ssl_ctx(lookup, &sslMultiCertSettings);
+          if (sslMultiCertSettings->cert || sslMultiCertSettings->opt != SSLCertContext::OPT_TUNNEL) {
+            this->_store_ssl_ctx(lookup, sslMultiCertSettings);
           } else {
             Warning("No ssl_cert_name specified and no tunnel action set");
           }
@@ -1626,9 +1625,9 @@ SSLMultiCertConfigLoader::load(SSLCertLookup *lookup)
   // bootstrap the SSL handshake so that we can subsequently do the SNI lookup to switch to the real
   // context.
   if (lookup->ssl_default == nullptr) {
-    SSLMultiCertConfigParams sslMultiCertSettings;
-    sslMultiCertSettings.addr = ats_strdup("*");
-    if (this->_store_ssl_ctx(lookup, &sslMultiCertSettings) == nullptr) {
+    shared_SSLMultiCertConfigParams sslMultiCertSettings;
+    sslMultiCertSettings->addr = ats_strdup("*");
+    if (this->_store_ssl_ctx(lookup, sslMultiCertSettings) == nullptr) {
       Error("failed set default context");
       return false;
     }

@@ -8983,7 +8983,7 @@ TSSslServerContextCreate(TSSslX509 cert, const char *certname)
   TSSslContext ret        = nullptr;
   SSLConfigParams *config = SSLConfig::acquire();
   if (config != nullptr) {
-    ret = reinterpret_cast<TSSslContext>(SSLCreateServerContext(config));
+    ret = reinterpret_cast<TSSslContext>(SSLCreateServerContext(config, nullptr));
 #if TS_USE_TLS_OCSP
     if (ret && SSLConfigParams::ssl_ocsp_enabled && cert && certname) {
       if (SSL_CTX_set_tlsext_status_cb(reinterpret_cast<SSL_CTX *>(ret), ssl_callback_ocsp_stapling)) {
