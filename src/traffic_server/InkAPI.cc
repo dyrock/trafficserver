@@ -9024,6 +9024,21 @@ TSSslContextDestroy(TSSslContext ctx)
   SSLReleaseContext(reinterpret_cast<SSL_CTX *>(ctx));
 }
 
+TSReturnCode
+TSSslClientContextsGet(int n, const char **result, int *actual)
+{
+  SSLConfigParams *params = SSLConfig::acquire();
+  for (auto &top_level_pair : params->top_level_ctx_map) {
+    
+  }
+}
+
+tsapi TSSslContext
+TSSslClientContextFind(const char *name)
+{
+
+}
+
 tsapi void
 TSSslTicketKeyUpdate(char *ticketData, int ticketDataLen)
 {

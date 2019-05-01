@@ -1233,6 +1233,10 @@ tsapi TSSslConnection TSVConnSSLConnectionGet(TSVConn sslp);
 /*  Fetch a SSL context from the global lookup table */
 tsapi TSSslContext TSSslContextFindByName(const char *name);
 tsapi TSSslContext TSSslContextFindByAddr(struct sockaddr const *);
+/* Fetch client SSL context */
+tsapi TSReturnCode TSSslClientContextsGet(int n, const char **result, int *actual);
+tsapi TSSslContext TSSslClientContextFind(const string name);
+
 /*  Create a new SSL context based on the settings in records.config */
 tsapi TSSslContext TSSslServerContextCreate(TSSslX509 cert, const char *certname);
 tsapi void TSSslContextDestroy(TSSslContext ctx);
