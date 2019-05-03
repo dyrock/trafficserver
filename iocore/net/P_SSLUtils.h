@@ -40,26 +40,6 @@ class SSLNetVConnection;
 typedef int ssl_error_t;
 
 /**
-   @brief Gather user provided settings from ssl_multicert.config in to this single struct
- */
-struct SSLMultiCertConfigParams {
-  SSLMultiCertConfigParams() : opt(SSLCertContext::OPT_NONE)
-  {
-    REC_ReadConfigInt32(session_ticket_enabled, "proxy.config.ssl.server.session_ticket.enable");
-  }
-
-  int session_ticket_enabled; ///< session ticket enabled
-  ats_scoped_str addr;        ///< IPv[64] address to match
-  ats_scoped_str cert;        ///< certificate
-  ats_scoped_str first_cert;  ///< the first certificate name when multiple cert files are in 'ssl_cert_name'
-  ats_scoped_str ca;          ///< CA public certificate
-  ats_scoped_str key;         ///< Private key
-  ats_scoped_str dialog;      ///< Private key dialog
-  ats_scoped_str servername;  ///< Destination server
-  SSLCertContext::Option opt; ///< SSLCertContext special handling option
-};
-
-/**
     @brief Load SSL certificates from ssl_multicert.config and setup SSLCertLookup for SSLCertificateConfig
  */
 class SSLMultiCertConfigLoader

@@ -250,11 +250,6 @@ SSLCertContext::operator=(SSLCertContext const &other)
   return *this;
 }
 
-SSLCertContext::~SSLCertContext()
-{
-  this->release();
-}
-
 shared_SSL_CTX
 SSLCertContext::getCtx()
 {
@@ -267,15 +262,6 @@ SSLCertContext::setCtx(shared_SSL_CTX sc)
 {
   std::lock_guard<std::mutex> lock(ctx_mutex);
   ctx = sc;
-}
-
-void
-SSLCertContext::release()
-{
-  if (keyblock) {
-    ticket_block_free(keyblock);
-    keyblock = nullptr;
-  }
 }
 
 SSLCertLookup::SSLCertLookup() : ssl_storage(new SSLContextStorage()), ssl_default(nullptr), is_valid(true) {}
@@ -352,12 +338,7 @@ make_to_lower_case(const char *name, char *lower_case_name, int buf_len)
 
 SSLContextStorage::SSLContextStorage() {}
 
-SSLContextStorage::~SSLContextStorage()
-{
-  for (auto &&it : this->ctx_store) {
-    it.release();
-  }
-}
+SSLContextStorage::~SSLContextStorage() {}
 
 int
 SSLContextStorage::store(SSLCertContext const &cc)

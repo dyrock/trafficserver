@@ -302,7 +302,7 @@ set_context_cert(SSL *ssl)
     if (cc) {
       ctx = cc->getCtx();
     }
-    if (cc && ctx && SSLCertContext::OPT_TUNNEL == cc->opt && netvc->get_is_transparent()) {
+    if (cc && ctx && SSLCertContextOption::OPT_TUNNEL == cc->opt && netvc->get_is_transparent()) {
       netvc->attributes = HttpProxyPort::TRANSPORT_BLIND_TUNNEL;
       netvc->setSSLHandShakeComplete(SSL_HANDSHAKE_DONE);
       retval = -1;
@@ -1413,8 +1413,8 @@ SSL_CTX *
 SSLMultiCertConfigLoader::_store_ssl_ctx(SSLCertLookup *lookup, const shared_SSLMultiCertConfigParams sslMultCertSettings)
 {
   std::vector<X509 *> cert_list;
-  ssl_ticket_key_block *keyblock = nullptr;
-  bool inserted                  = false;
+  shared_ssl_ticket_key_block keyblock = nullptr;
+  bool inserted                        = false;
   shared_SSL_CTX ctx(this->init_server_ssl_ctx(cert_list, sslMultCertSettings.get()), SSL_CTX_free);
 
   if (!ctx || !sslMultCertSettings) {
@@ -1434,14 +1434,13 @@ SSLMultiCertConfigLoader::_store_ssl_ctx(SSLCertLookup *lookup, const shared_SSL
 
   // Load the session ticket key if session tickets are not disabled
   if (sslMultCertSettings->session_ticket_enabled != 0) {
-    keyblock = ssl_context_enable_tickets(ctx.get(), nullptr);
+    keyblock = shared_ssl_ticket_key_block(ssl_context_enable_tickets(ctx.get(), nullptr), ticket_block_free);
   }
 
   // Index this certificate by the specified IP(v6) address. If the address is "*", make it the default context.
   if (sslMultCertSettings->addr) {
     if (strcmp(sslMultCertSettings->addr, "*") == 0) {
-      if (lookup->insert(sslMultCertSettings->addr, SSLCertContext(ctx, sslMultCertSettings->opt, sslMultCertSettings, keyblock)) >=
-          0) {
+      if (lookup->insert(sslMultCertSettings->addr, SSLCertContext(ctx, sslMultCertSettings, keyblock)) >= 0) {
         inserted            = true;
         lookup->ssl_default = ctx;
         this->_set_handshake_callbacks(ctx.get());
@@ -1451,7 +1450,7 @@ SSLMultiCertConfigLoader::_store_ssl_ctx(SSLCertLookup *lookup, const shared_SSL
 
       if (ats_ip_pton(sslMultCertSettings->addr, &ep) == 0) {
         Debug("ssl", "mapping '%s' to certificate %s", (const char *)sslMultCertSettings->addr, (const char *)certname);
-        if (lookup->insert(ep, SSLCertContext(ctx, sslMultCertSettings->opt, sslMultCertSettings, keyblock)) >= 0) {
+        if (lookup->insert(ep, SSLCertContext(ctx, sslMultCertSettings, keyblock)) >= 0) {
           inserted = true;
         }
       } else {
@@ -1460,20 +1459,13 @@ SSLMultiCertConfigLoader::_store_ssl_ctx(SSLCertLookup *lookup, const shared_SSL
       }
     }
   }
-  if (!inserted) {
-#if TS_HAVE_OPENSSL_SESSION_TICKETS
-    if (keyblock != nullptr) {
-      ticket_block_free(keyblock);
-    }
-#endif
-  }
 
   // Insert additional mappings. Note that this maps multiple keys to the same value, so when
   // this code is updated to reconfigure the SSL certificates, it will need some sort of
   // refcounting or alternate way of avoiding double frees.
   Debug("ssl", "importing SNI names from %s", (const char *)certname);
   for (auto cert : cert_list) {
-    if (SSLMultiCertConfigLoader::index_certificate(lookup, SSLCertContext(ctx, sslMultCertSettings->opt), cert, certname)) {
+    if (SSLMultiCertConfigLoader::index_certificate(lookup, SSLCertContext(ctx, sslMultCertSettings), cert, certname)) {
       inserted = true;
     }
   }
@@ -1539,7 +1531,7 @@ ssl_extract_certificate(const matcher_line *line_info, SSLMultiCertConfigParams 
 
     if (strcasecmp(label, SSL_ACTION_TAG) == 0) {
       if (strcasecmp(SSL_ACTION_TUNNEL_TAG, value) == 0) {
-        sslMultCertSettings->opt = SSLCertContext::OPT_TUNNEL;
+        sslMultCertSettings->opt = SSLCertContextOption::OPT_TUNNEL;
       } else {
         Error("Unrecognized action for %s", SSL_ACTION_TAG.data());
         return false;
@@ -1609,7 +1601,7 @@ SSLMultiCertConfigLoader::load(SSLCertLookup *lookup)
       } else {
         if (ssl_extract_certificate(&line_info, sslMultiCertSettings.get())) {
           // There must be a certificate specified unless the tunnel action is set
-          if (sslMultiCertSettings->cert || sslMultiCertSettings->opt != SSLCertContext::OPT_TUNNEL) {
+          if (sslMultiCertSettings->cert || sslMultiCertSettings->opt != SSLCertContextOption::OPT_TUNNEL) {
             this->_store_ssl_ctx(lookup, sslMultiCertSettings);
           } else {
             Warning("No ssl_cert_name specified and no tunnel action set");
@@ -1625,7 +1617,7 @@ SSLMultiCertConfigLoader::load(SSLCertLookup *lookup)
   // bootstrap the SSL handshake so that we can subsequently do the SNI lookup to switch to the real
   // context.
   if (lookup->ssl_default == nullptr) {
-    shared_SSLMultiCertConfigParams sslMultiCertSettings;
+    shared_SSLMultiCertConfigParams sslMultiCertSettings(new SSLMultiCertConfigParams);
     sslMultiCertSettings->addr = ats_strdup("*");
     if (this->_store_ssl_ctx(lookup, sslMultiCertSettings) == nullptr) {
       Error("failed set default context");

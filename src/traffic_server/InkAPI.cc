@@ -49,6 +49,7 @@
 #include "P_Cache.h"
 #include "records/I_RecCore.h"
 #include "P_SSLConfig.h"
+#include "P_SSLClientUtils.h"
 #include "SSLDiags.h"
 #include "ProxyConfig.h"
 #include "Plugin.h"
@@ -9026,7 +9027,7 @@ TSSslClientCertUpdate(const char *cert_path, const char *key_path)
 
   if (nullptr != params) {
     // First try to update a default context with given cert/key to verify
-    test_ctx = SSL_CTX_new(SSLv23_client_method());
+    test_ctx = SSLInitClientContext(params);
     if (!SSL_CTX_use_certificate_chain_file(test_ctx, cert_path)) {
       SSLError("failed to load client certificate from %s", cert_path);
       SSL_CTX_free(test_ctx);

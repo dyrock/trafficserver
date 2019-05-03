@@ -29,7 +29,35 @@
 
 struct SSLConfigParams;
 struct SSLContextStorage;
-struct SSLMultiCertConfigParams;
+
+/** Special things to do instead of use a context.
+    In general an option will be associated with a @c nullptr context because
+    the context is not used.
+*/
+enum SSLCertContextOption {
+  OPT_NONE,  ///< Nothing special. Implies valid context.
+  OPT_TUNNEL ///< Just tunnel, don't terminate.
+};
+
+/**
+   @brief Gather user provided settings from ssl_multicert.config in to this single struct
+ */
+struct SSLMultiCertConfigParams {
+  SSLMultiCertConfigParams() : opt(SSLCertContextOption::OPT_NONE)
+  {
+    REC_ReadConfigInt32(session_ticket_enabled, "proxy.config.ssl.server.session_ticket.enable");
+  }
+
+  int session_ticket_enabled; ///< session ticket enabled
+  ats_scoped_str addr;        ///< IPv[64] address to match
+  ats_scoped_str cert;        ///< certificate
+  ats_scoped_str first_cert;  ///< the first certificate name when multiple cert files are in 'ssl_cert_name'
+  ats_scoped_str ca;          ///< CA public certificate
+  ats_scoped_str key;         ///< Private key
+  ats_scoped_str dialog;      ///< Private key dialog
+  ats_scoped_str servername;  ///< Destination server
+  SSLCertContextOption opt;   ///< SSLCertContext special handling option
+};
 
 struct ssl_ticket_key_t {
   unsigned char key_name[16];
@@ -44,6 +72,7 @@ struct ssl_ticket_key_block {
 
 using shared_SSLMultiCertConfigParams = std::shared_ptr<SSLMultiCertConfigParams>;
 using shared_SSL_CTX                  = std::shared_ptr<SSL_CTX>;
+using shared_ssl_ticket_key_block     = std::shared_ptr<ssl_ticket_key_block>;
 
 /** A certificate context.
 
@@ -62,37 +91,28 @@ private:
   shared_SSL_CTX ctx;
 
 public:
-  /** Special things to do instead of use a context.
-      In general an option will be associated with a @c nullptr context because
-      the context is not used.
-  */
-  enum Option {
-    OPT_NONE,  ///< Nothing special. Implies valid context.
-    OPT_TUNNEL ///< Just tunnel, don't terminate.
-  };
-  SSLCertContext() : ctx_mutex(), ctx(nullptr), opt(OPT_NONE), userconfig(nullptr), keyblock(nullptr) {}
+  SSLCertContext() : ctx_mutex(), ctx(nullptr), opt(SSLCertContextOption::OPT_NONE), userconfig(nullptr), keyblock(nullptr) {}
   explicit SSLCertContext(SSL_CTX *c) : ctx_mutex(), ctx(c, SSL_CTX_free), opt(OPT_NONE), userconfig(nullptr), keyblock(nullptr) {}
-  SSLCertContext(shared_SSL_CTX sc, Option o) : ctx_mutex(), ctx(sc), opt(o), userconfig(nullptr), keyblock(nullptr) {}
-  SSLCertContext(shared_SSL_CTX sc, Option o, shared_SSLMultiCertConfigParams u)
-    : ctx_mutex(), ctx(sc), opt(o), userconfig(u), keyblock(nullptr)
+  SSLCertContext(shared_SSL_CTX sc, shared_SSLMultiCertConfigParams u)
+    : ctx_mutex(), ctx(sc), opt(u->opt), userconfig(nullptr), keyblock(nullptr)
   {
   }
-  SSLCertContext(shared_SSL_CTX sc, Option o, shared_SSLMultiCertConfigParams u, ssl_ticket_key_block *kb)
-    : ctx_mutex(), ctx(sc), opt(o), userconfig(u), keyblock(kb)
+  SSLCertContext(shared_SSL_CTX sc, shared_SSLMultiCertConfigParams u, shared_ssl_ticket_key_block kb)
+    : ctx_mutex(), ctx(sc), opt(u->opt), userconfig(u), keyblock(kb)
   {
   }
   SSLCertContext(SSLCertContext const &other);
   SSLCertContext &operator=(SSLCertContext const &other);
-  ~SSLCertContext();
+  ~SSLCertContext() {}
 
   /// Threadsafe Functions to get and set shared SSL_CTX pointer
   shared_SSL_CTX getCtx();
   void setCtx(shared_SSL_CTX sc);
   void release();
 
-  Option opt;                                 ///< Special handling option.
+  SSLCertContextOption opt;                   ///< Special handling option.
   shared_SSLMultiCertConfigParams userconfig; ///< User provided settings
-  ssl_ticket_key_block *keyblock;             ///< session keys associated with this address
+  shared_ssl_ticket_key_block keyblock;       ///< session keys associated with this address
 };
 
 struct SSLCertLookup : public ConfigInfo {
