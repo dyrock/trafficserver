@@ -21,6 +21,15 @@ Test.Summary = '''
 Test cert_update plugin.
 '''
 
+# Check if curl --resolve and openssl exist
+Test.SkipUnless(
+    Condition.HasProgram("curl","Curl need to be installed on system for this test to work"),
+    Condition.HasCurlOption("--resolve")
+    )
+Test.SkipUnless(
+    Condition.HasProgram("openssl","Openssl need to be installed on system for this test to work")
+    )
+
 # Set up origin server 
 server = Test.MakeOriginServer("server")
 request_header = {
@@ -80,7 +89,7 @@ tr = Test.AddTestRun("Server-Cert-Pre")
 tr.Processes.Default.StartBefore(server)
 tr.Processes.Default.StartBefore(Test.Processes.ts, ready=When.PortOpen(ts.Variables.ssl_port))
 tr.Processes.Default.Command = (
-    'curl --verbose --insecure --header "Host: bar.com" https://localhost:{}'.format(ts.Variables.ssl_port)
+    'curl --verbose --insecure --resolve bar.com:{0}:127.0.0.1 https://bar.com:{0}'.format(ts.Variables.ssl_port)
 )
 tr.Processes.Default.Streams.stderr = "gold/server-cert-pre.gold"
 tr.Processes.Default.ReturnCode = 0
@@ -90,13 +99,15 @@ tr.StillRunningAfter = server
 # after use traffic_ctl to update server cert, curl should see bar.com cert from bob
 tr = Test.AddTestRun("Server-Cert-After")
 tr.Processes.Default.Env = ts.Env
-tr.Command = '{}/traffic_ctl plugin msg cert_update.server {}/server2.pem && curl --verbose --insecure --header "Host: bar.com" https://localhost:{}'.format(ts.Variables.BINDIR, ts.Variables.SSLDir, ts.Variables.ssl_port)
+tr.Command = '{0}/traffic_ctl plugin msg cert_update.server {1}/server2.pem && curl --verbose --insecure --resolve bar.com:{2}:127.0.0.1 https://bar.com:{2}'.format(ts.Variables.BINDIR, ts.Variables.SSLDir, ts.Variables.ssl_port)
 tr.Processes.Default.Streams.stderr = "gold/server-cert-after.gold"
 tr.Processes.Default.ReturnCode = 0
 ts.StillRunningAfter = server
 
+# Client-Cert-Pre
+# s_server should see client (Traffic Server) as alice.com
 tr = Test.AddTestRun("Client-Cert-Pre")
-s_server = tr.Processes.Process("s_server", "openssl s_server -www -key {0}/server.pem -cert {0}/server1.pem -accept 12345 -Verify 1 -msg".format(ts.Variables.SSLDir))
+s_server = tr.Processes.Process("s_server", "openssl s_server -www -key {0}/server1.pem -cert {0}/server1.pem -accept 12345 -Verify 1 -msg".format(ts.Variables.SSLDir))
 s_server.Ready = When.PortReady(12345)
 tr.Command = 'curl --verbose --insecure --header "Host: foo.com" https://localhost:{}'.format(ts.Variables.ssl_port)
 tr.Processes.Default.StartBefore(s_server)
@@ -104,10 +115,13 @@ s_server.Streams.stderr = "gold/client-cert-pre.gold"
 tr.Processes.Default.ReturnCode = 0
 ts.StillRunningAfter = server
 
-tr = Test.AddTestRun("Client-Cert-AFter")
-s_server = tr.Processes.Process("s_server", "openssl s_server -www -key {0}/server.pem -cert {0}/server1.pem -accept 12345 -Verify 1 -msg".format(ts.Variables.SSLDir))
+# Client-Cert-After
+# after use traffic_ctl to update client cert, s_server should see client (Traffic Server) as bob.com
+tr = Test.AddTestRun("Client-Cert-After")
+s_server = tr.Processes.Process("s_server", "openssl s_server -www -key {0}/server1.pem -cert {0}/server1.pem -accept 12345 -Verify 1 -msg".format(ts.Variables.SSLDir))
 s_server.Ready = When.PortReady(12345)
 tr.Processes.Default.Env = ts.Env
+# Move client2.pem to replace client1.pem since cert path matters in client context mapping
 tr.Command = 'mv {0}/client2.pem {0}/client1.pem && {1}/traffic_ctl plugin msg cert_update.client {0}/client1.pem && curl --verbose --insecure --header "Host: foo.com" https://localhost:{2}'.format(ts.Variables.SSLDir, ts.Variables.BINDIR, ts.Variables.ssl_port)
 tr.Processes.Default.StartBefore(s_server)
 s_server.Streams.stderr = "gold/client-cert-after.gold"
