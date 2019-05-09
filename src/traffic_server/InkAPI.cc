@@ -9040,8 +9040,8 @@ TSSslClientCertUpdate(const char *cert_path, const char *key_path)
   }
 
   std::string key;
-  SSL_CTX *test_ctx       = nullptr;
-  SSLConfigParams *params = SSLConfig::acquire();
+  shared_SSL_CTX client_ctx = nullptr;
+  SSLConfigParams *params   = SSLConfig::acquire();
 
   // Generate second level key for client context lookup
   ts::bwprint(key, "{}:{}", cert_path, key_path);
@@ -9053,69 +9053,75 @@ TSSslClientCertUpdate(const char *cert_path, const char *key_path)
   }
 
   if (nullptr != params) {
-    // First try to update a default context with given cert/key to verify
-    test_ctx = SSLInitClientContext(params);
-    if (!SSL_CTX_use_certificate_chain_file(test_ctx, cert_path)) {
-      SSLError("failed to load client certificate from %s", cert_path);
-      SSL_CTX_free(test_ctx);
-      return TS_ERROR;
-    }
-    if (!SSL_CTX_use_PrivateKey_file(test_ctx, key_path, SSL_FILETYPE_PEM)) {
-      SSLError("failed to load client private key file from %s", key_path);
-      SSL_CTX_free(test_ctx);
-      return TS_ERROR;
-    }
-    if (!SSL_CTX_check_private_key(test_ctx)) {
-      SSLError("client private key does not match the certificate public key %s", cert_path);
-      SSL_CTX_free(test_ctx);
-      return TS_ERROR;
-    }
-    SSL_CTX_free(test_ctx);
-    test_ctx = nullptr;
-
     // Try to update client contexts maps
-    auto &top_level_map = params->top_level_ctx_map;
-    auto &ctxMapLock    = params->ctxMapLock;
-
-    ink_mutex_acquire(&ctxMapLock);
-
-    // Traverse through top level of ca_bundle
-    for (auto &top_level_pair : top_level_map) {
-      auto &ctx_map_ptr = top_level_pair.second;
-      auto iter         = ctx_map_ptr->find(key);
-
-      if (iter == ctx_map_ptr->end() || iter->second == nullptr) {
-        // If key doesn't exist or there is no valid context to the key, do nothing
-        continue;
-      }
-
-      SSL_CTX *&target_ctx = iter->second;
-      if (!SSL_CTX_use_certificate_chain_file(target_ctx, cert_path)) {
-        SSLError("failed to load client certificate from %s to SSL_CTX in ctx_map", cert_path);
-        ink_mutex_release(&ctxMapLock);
-        return TS_ERROR;
-      }
-      if (!SSL_CTX_use_PrivateKey_file(target_ctx, key_path, SSL_FILETYPE_PEM)) {
-        SSLError("failed to load client private key from %s to SSL_CTX in ctx_map. Context removed from map", key_path);
-        ctx_map_ptr->erase(iter);
-        SSL_CTX_free(target_ctx);
-        target_ctx = nullptr;
-        ink_mutex_release(&ctxMapLock);
-        return TS_ERROR;
-      }
-      if (!SSL_CTX_check_private_key(target_ctx)) {
-        SSLError("failed to match private key with certificate from %s. Context removed from map.", cert_path);
-        ctx_map_ptr->erase(iter);
-        SSL_CTX_free(target_ctx);
-        target_ctx = nullptr;
-        ink_mutex_release(&ctxMapLock);
-        return TS_ERROR;
+    auto &ca_paths_map = params->top_level_ctx_map;
+    auto &map_lock     = params->ctxMapLock;
+    std::string ca_paths_key;
+    // First try to locate the client context and its CA path (by top level)
+    ink_mutex_acquire(&map_lock);
+    for (auto &ca_paths_pair : ca_paths_map) {
+      auto &ctx_map = ca_paths_pair.second;
+      auto iter     = ctx_map.find(key);
+      if (iter != ctx_map.end() && iter->second != nullptr) {
+        ca_paths_key = ca_paths_pair.first;
+        break;
       }
     }
-    ink_mutex_release(&ctxMapLock);
+    ink_mutex_release(&map_lock);
+
+    // Only update on existing
+    if (ca_paths_key.empty()) {
+      return TS_ERROR;
+    }
+
+    // Extract CA related paths
+    size_t sep                 = ca_paths_key.find(':');
+    std::string ca_bundle_file = ca_paths_key.substr(0, sep);
+    std::string ca_bundle_path = ca_paths_key.substr(sep + 1);
+
+    // Build new client context
+    client_ctx = shared_SSL_CTX(SSLInitClientContext(params), SSL_CTX_free);
+
+    if (!SSL_CTX_use_certificate_chain_file(client_ctx.get(), cert_path)) {
+      SSLError("TSSslClientCertUpdate(): failed to load client certificate from %s", cert_path);
+      return TS_ERROR;
+    }
+    if (!key_path || key_path[0] == '\0') {
+      key_path = cert_path;
+    }
+    if (!SSL_CTX_use_PrivateKey_file(client_ctx.get(), key_path, SSL_FILETYPE_PEM)) {
+      SSLError("TSSslClientCertUpdate(): failed to load client private key file from %s", key_path);
+      return TS_ERROR;
+    }
+    if (!SSL_CTX_check_private_key(client_ctx.get())) {
+      SSLError("TSSslClientCertUpdate(): client private key does not match the certificate public key %s", cert_path);
+      return TS_ERROR;
+    }
+
+    if (ca_bundle_file.empty() && ca_bundle_path.empty()) {
+      if (!SSL_CTX_set_default_verify_paths(client_ctx.get())) {
+        SSLError("TSSslClientCertUpdate(): failed to set the default verify paths");
+        return TS_ERROR;
+      }
+    } else if (!SSL_CTX_load_verify_locations(client_ctx.get(), ca_bundle_file.empty() ? nullptr : ca_bundle_file.data(),
+                                              ca_bundle_path.empty() ? nullptr : ca_bundle_path.data())) {
+      SSLError("TSSslClientCertUpdate(): Invalid client CA Certificate file (%s) or CA certificate path (%s)",
+               ca_bundle_file.c_str(), ca_bundle_path.c_str());
+      return TS_ERROR;
+    }
+
+    // Successfully generates a client context, update in the map
+    ink_mutex_acquire(&map_lock);
+    auto iter = ca_paths_map.find(ca_paths_key);
+    if (iter != ca_paths_map.end() && iter->second.count(key)) {
+      iter->second[key] = client_ctx;
+    } else {
+      client_ctx = nullptr;
+    }
+    ink_mutex_release(&map_lock);
   }
 
-  return TS_SUCCESS;
+  return client_ctx ? TS_SUCCESS : TS_ERROR;
 }
 
 TSReturnCode
@@ -9124,11 +9130,15 @@ TSSslServerCertUpdate(const char *cert_path, const char *key_path)
   if (nullptr == cert_path) {
     return TS_ERROR;
   }
-  key_path = key_path ? key_path : cert_path;
 
-  SSLCertContext *cc      = nullptr;
-  shared_SSL_CTX test_ctx = nullptr;
-  std::unique_ptr<X509, decltype(&X509_free)> cert(nullptr, &X509_free);
+  if (!key_path || key_path[0] == '\0') {
+    key_path = cert_path;
+  }
+
+  SSLCertContext *cc         = nullptr;
+  shared_SSL_CTX test_ctx    = nullptr;
+  std::shared_ptr<X509> cert = nullptr;
+
   SSLConfig::scoped_config config;
   SSLCertificateConfig::scoped_config lookup;
 
@@ -9136,7 +9146,7 @@ TSSslServerCertUpdate(const char *cert_path, const char *key_path)
     // Read cert from path to extract lookup key (common name)
     scoped_BIO bio(BIO_new_file(cert_path, "r"));
     if (bio) {
-      cert.reset(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr));
+      cert = std::shared_ptr<X509>(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr), X509_free);
     }
     if (!bio || !cert) {
       SSLError("Failed to load certificate/key from %s", cert_path);

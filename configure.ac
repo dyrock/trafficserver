@@ -891,12 +891,7 @@ case $host_os_def in
     ])
 
     # NOTE: This seems semi-kludgy, but useful for MacPorts I think.
-    AS_IF([test -d /opt/local/include], [
-      TS_ADDTO(TS_INCLUDES, [-I/opt/local/include])
-    ])
-    AS_IF([test -d /opt/local/lib], [
-      TS_ADDTO(AM_LDFLAGS, [-L/opt/local/lib])
-    ])
+    
 
     ;; # darwin)
 

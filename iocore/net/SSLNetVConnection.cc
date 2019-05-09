@@ -1037,8 +1037,9 @@ SSLNetVConnection::sslStartHandShake(int event, int &err)
         ats_ip_ntop(this->get_remote_addr(), buff, INET6_ADDRSTRLEN);
         serverKey = buff;
       }
-      auto nps           = sniParam->getPropertyConfig(serverKey);
-      SSL_CTX *clientCTX = nullptr;
+      auto nps                 = sniParam->getPropertyConfig(serverKey);
+      shared_SSL_CTX sharedCTX = nullptr;
+      SSL_CTX *clientCTX       = nullptr;
 
       // First Look to see if there are override parameters
       if (options.ssl_client_cert_name) {
@@ -1051,16 +1052,23 @@ SSLNetVConnection::sslStartHandShake(int event, int &err)
         if (options.ssl_client_ca_cert_name) {
           caCertFilePath = Layout::get()->relative_to(params->clientCACertPath, options.ssl_client_ca_cert_name);
         }
-        clientCTX =
+        sharedCTX =
           params->getCTX(certFilePath.c_str(), keyFilePath.empty() ? nullptr : keyFilePath.c_str(),
                          caCertFilePath.empty() ? params->clientCACertFilename : caCertFilePath.c_str(), params->clientCACertPath);
       } else if (options.ssl_client_ca_cert_name) {
         std::string caCertFilePath = Layout::get()->relative_to(params->clientCACertPath, options.ssl_client_ca_cert_name);
-        clientCTX = params->getCTX(params->clientCertPath, params->clientKeyPath, caCertFilePath.c_str(), params->clientCACertPath);
-      } else if (nps) {
-        clientCTX = nps->ctx;
+        sharedCTX = params->getCTX(params->clientCertPath, params->clientKeyPath, caCertFilePath.c_str(), params->clientCACertPath);
+      } else if (nps && !nps->client_cert_file.empty()) {
+        // If no overrides available, try the available nextHopProperty by reading from context mappings
+        sharedCTX =
+          params->getCTX(nps->client_cert_file.c_str(), nps->client_key_file.empty() ? nullptr : nps->client_key_file.c_str(),
+                         params->clientCACertFilename, params->clientCACertPath);
       } else { // Just stay with the values passed down from the SM for verify
-        clientCTX = params->client_ctx;
+        clientCTX = params->client_ctx.get();
+      }
+
+      if (sharedCTX) {
+        clientCTX = sharedCTX.get();
       }
 
       if (options.verifyServerPolicy != YamlSNIConfig::Policy::UNSET) {

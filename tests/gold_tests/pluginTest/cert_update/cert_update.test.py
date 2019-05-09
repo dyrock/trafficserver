@@ -95,11 +95,20 @@ tr.Processes.Default.Streams.stderr = "gold/server-cert-pre.gold"
 tr.Processes.Default.ReturnCode = 0
 tr.StillRunningAfter = server
 
+# Server-Cert-Update
+tr = Test.AddTestRun("Server-Cert-Update")
+tr.Processes.Default.Env = ts.Env
+tr.Processes.Default.Command = (
+    '{0}/traffic_ctl plugin msg cert_update.server {1}/server2.pem'.format(ts.Variables.BINDIR, ts.Variables.SSLDir)
+)
+ts.Streams.all = "gold/update.gold"
+ts.StillRunningAfter = server
+
 # Server-Cert-After
 # after use traffic_ctl to update server cert, curl should see bar.com cert from bob
 tr = Test.AddTestRun("Server-Cert-After")
 tr.Processes.Default.Env = ts.Env
-tr.Command = '{0}/traffic_ctl plugin msg cert_update.server {1}/server2.pem && curl --verbose --insecure --resolve bar.com:{2}:127.0.0.1 https://bar.com:{2}'.format(ts.Variables.BINDIR, ts.Variables.SSLDir, ts.Variables.ssl_port)
+tr.Command = 'curl --verbose --insecure --resolve bar.com:{0}:127.0.0.1 https://bar.com:{0}'.format(ts.Variables.ssl_port)
 tr.Processes.Default.Streams.stderr = "gold/server-cert-after.gold"
 tr.Processes.Default.ReturnCode = 0
 ts.StillRunningAfter = server
@@ -111,8 +120,17 @@ s_server = tr.Processes.Process("s_server", "openssl s_server -www -key {0}/serv
 s_server.Ready = When.PortReady(12345)
 tr.Command = 'curl --verbose --insecure --header "Host: foo.com" https://localhost:{}'.format(ts.Variables.ssl_port)
 tr.Processes.Default.StartBefore(s_server)
-s_server.Streams.stderr = "gold/client-cert-pre.gold"
+s_server.Streams.all = "gold/client-cert-pre.gold"
 tr.Processes.Default.ReturnCode = 0
+ts.StillRunningAfter = server
+
+# Client-Cert-Update
+tr = Test.AddTestRun("Client-Cert-Update")
+tr.Processes.Default.Env = ts.Env
+tr.Processes.Default.Command = (
+    'mv {0}/client2.pem {0}/client1.pem && {1}/traffic_ctl plugin msg cert_update.client {0}/client1.pem'.format(ts.Variables.SSLDir, ts.Variables.BINDIR)
+)
+ts.Streams.all = "gold/update.gold"
 ts.StillRunningAfter = server
 
 # Client-Cert-After
@@ -122,8 +140,8 @@ s_server = tr.Processes.Process("s_server", "openssl s_server -www -key {0}/serv
 s_server.Ready = When.PortReady(12345)
 tr.Processes.Default.Env = ts.Env
 # Move client2.pem to replace client1.pem since cert path matters in client context mapping
-tr.Command = 'mv {0}/client2.pem {0}/client1.pem && {1}/traffic_ctl plugin msg cert_update.client {0}/client1.pem && curl --verbose --insecure --header "Host: foo.com" https://localhost:{2}'.format(ts.Variables.SSLDir, ts.Variables.BINDIR, ts.Variables.ssl_port)
+tr.Command = 'curl --verbose --insecure --header "Host: foo.com" https://localhost:{0}'.format(ts.Variables.ssl_port)
 tr.Processes.Default.StartBefore(s_server)
-s_server.Streams.stderr = "gold/client-cert-after.gold"
+s_server.Streams.all = "gold/client-cert-after.gold"
 tr.Processes.Default.ReturnCode = 0
 ts.StillRunningAfter = server
